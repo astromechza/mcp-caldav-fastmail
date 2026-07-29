@@ -73,6 +73,9 @@ impl FastmailCalDav {
         content_type: Option<&str>,
     ) -> Result<(StatusCode, HeaderMap, String)> {
         let url = self.resolve(href)?;
+        // Keep the original method token around (for Error::CalDav context below) -
+        // `reqwest::Method::from_bytes` below shadows `method` with a parsed value.
+        let method_name = method.to_string();
         let method = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|e| Error::Config(format!("invalid HTTP method {method:?}: {e}")))?;
 
@@ -101,6 +104,8 @@ impl FastmailCalDav {
         if status.is_client_error() || status.is_server_error() {
             return Err(Error::CalDav {
                 status: status.as_u16(),
+                method: method_name,
+                href: href.to_string(),
                 body: text,
             });
         }
@@ -161,10 +166,16 @@ impl CalDavClient for FastmailCalDav {
             )
             .await?;
 
+        // Compare with a trailing slash trimmed on both sides rather than raw string
+        // equality: `home` came from the discovery PROPFIND response while `r.href`
+        // comes from this (separate) PROPFIND Depth:1 response, and servers aren't
+        // guaranteed to echo the exact same absolute-vs-relative/trailing-slash
+        // formatting for what is logically the same collection.
+        let home_trimmed = home.trim_end_matches('/');
         let responses = xml::parse_multistatus(&body)?;
         let mut calendars = Vec::new();
         for r in responses {
-            if r.href == home {
+            if r.href.trim_end_matches('/') == home_trimmed {
                 // The home collection itself, not a calendar within it.
                 continue;
             }
@@ -527,6 +538,152 @@ END:VCALENDAR</C:calendar-data>
         assert_eq!(todos[0].uid, "todo-1");
         assert_eq!(todos[0].summary, "Buy milk");
         assert_eq!(todos[0].etag.as_deref(), Some("\"t1\""));
+    }
+
+    #[tokio::test]
+    async fn get_todo_reads_body_and_etag_header() {
+        let server = MockServer::start().await;
+
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:todo-9\r\n\
+SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+        Mock::given(method("GET"))
+            .and(path("/cal/todo-9.ics"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(ics).insert_header("ETag", "\"t9\""))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let td = client.get_todo("/cal/", "todo-9").await.expect("get_todo");
+        assert_eq!(td.uid, "todo-9");
+        assert_eq!(td.summary, "Buy milk");
+        assert_eq!(td.etag.as_deref(), Some("\"t9\""));
+        assert_eq!(td.href.as_deref(), Some("/cal/todo-9.ics"));
+    }
+
+    #[tokio::test]
+    async fn put_todo_sends_if_match_and_ical_content_type() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/cal/todo-1.ics"))
+            .and(header("If-Match", "\"t1\""))
+            .and(header("Content-Type", "text/calendar; charset=utf-8"))
+            .and(body_string_contains("SUMMARY:Buy milk"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let td = Todo {
+            uid: "todo-1".into(),
+            href: None,
+            etag: Some("\"t1\"".into()),
+            summary: "Buy milk".into(),
+            due: None,
+            status: None,
+            description: None,
+            priority: None,
+        };
+
+        client.put_todo("/cal/", &td).await.expect("put_todo");
+        // The .and(header(...)) matchers above are the real assertion: they prove both
+        // If-Match and the correct calendar content-type were sent, mirroring the
+        // event-side put test so a copy-paste slip between the two paths is caught.
+    }
+
+    #[tokio::test]
+    async fn delete_todo_hits_object_href() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/cal/todo-1.ics"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        client.delete_todo("/cal/", "todo-1").await.expect("delete_todo");
+    }
+
+    #[tokio::test]
+    async fn get_event_error_response_maps_to_caldav_error_with_context() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/cal/missing.ics"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client.get_event("/cal/", "missing").await.expect_err("expected error");
+        match err {
+            Error::CalDav { status, method, href, body } => {
+                assert_eq!(status, 404);
+                assert_eq!(method, "GET");
+                assert_eq!(href, "/cal/missing.ics");
+                assert_eq!(body, "Not Found");
+            }
+            other => panic!("expected Error::CalDav, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn put_event_server_error_maps_to_caldav_error_with_context() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/cal/evt-1.ics"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let ev = Event {
+            uid: "evt-1".into(),
+            href: None,
+            etag: None,
+            summary: "Standup".into(),
+            start: Utc.with_ymd_and_hms(2026, 8, 3, 9, 0, 0).unwrap(),
+            end: Utc.with_ymd_and_hms(2026, 8, 3, 9, 15, 0).unwrap(),
+            location: None,
+            description: None,
+            rrule: None,
+            is_instance: false,
+        };
+        let err = client.put_event("/cal/", &ev).await.expect_err("expected error");
+        match err {
+            Error::CalDav { status, method, href, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(method, "PUT");
+                assert_eq!(href, "/cal/evt-1.ics");
+                assert_eq!(body, "boom");
+            }
+            other => panic!("expected Error::CalDav, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_home_missing_principal_is_not_found() {
+        let server = MockServer::start().await;
+
+        // The principal PROPFIND response has no <current-user-principal> at all.
+        let empty_body = r#"<?xml version="1.0"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/</href>
+    <propstat><prop></prop></propstat>
+  </response>
+</multistatus>"#;
+        Mock::given(method("PROPFIND"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(207).set_body_string(empty_body))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client.list_calendars().await.expect_err("expected error");
+        assert!(matches!(err, Error::NotFound(_)), "expected Error::NotFound, got {err:?}");
     }
 
     #[test]

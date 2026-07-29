@@ -6,8 +6,13 @@ pub enum Error {
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("caldav error: status {status}: {body}")]
-    CalDav { status: u16, body: String },
+    #[error("caldav {method} {href} -> {status}: {body}")]
+    CalDav {
+        status: u16,
+        method: String,
+        href: String,
+        body: String,
+    },
 
     #[error("xml parse error: {0}")]
     Xml(String),
