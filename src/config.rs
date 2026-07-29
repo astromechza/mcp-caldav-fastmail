@@ -109,8 +109,8 @@ impl Config {
                     issuer: get("AUTH_JWT_ISSUER"),
                     required_scope: match get("REQUIRED_SCOPE") {
                         Some(s) if s.is_empty() => None, // explicit opt-out (REQUIRED_SCOPE="")
-                        Some(s) => Some(s),               // custom scope
-                        None => Some("caldav".into()),    // secure default (matches base behavior)
+                        Some(s) => Some(s),              // custom scope
+                        None => Some("caldav".into()),   // secure default (matches base behavior)
                     },
                 }
             }
