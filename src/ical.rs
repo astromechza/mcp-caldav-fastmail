@@ -224,6 +224,39 @@ fn datetime_prop(comp: &ICalendarComponent, prop: ICalendarProperty) -> Option<D
     date_time_result_to_utc(&result, entry.tz_id())
 }
 
+/// Read DURATION and convert calcard's structured `ICalendarDuration` to a
+/// `chrono::TimeDelta`, honoring its `neg` sign flag. Returns `None` when DURATION
+/// is absent or not a parsed duration value.
+fn duration_prop(comp: &ICalendarComponent) -> Option<chrono::TimeDelta> {
+    let entry = comp.property(&ICalendarProperty::Duration)?;
+    let ICalendarValue::Duration(d) = entry.values.first()? else {
+        return None;
+    };
+    let total_seconds = i64::from(d.weeks) * 7 * 24 * 3600
+        + i64::from(d.days) * 24 * 3600
+        + i64::from(d.hours) * 3600
+        + i64::from(d.minutes) * 60
+        + i64::from(d.seconds);
+    let delta = chrono::TimeDelta::seconds(total_seconds);
+    Some(if d.neg { -delta } else { delta })
+}
+
+/// True when DTSTART is a DATE value (all-day, no time-of-day component) rather
+/// than a DATE-TIME. calcard represents both as `ICalendarValue::PartialDateTime`;
+/// the distinguishing signal is `PartialDateTime::hour` being `None` (a DATE-TIME
+/// always carries hour/minute/second, defaulting absent ones to 0 - see
+/// `PartialDateTime::to_date_time`, which only does `hour.unwrap_or(0)` for
+/// minute/second, never hour, but in practice calcard's parser (icalendar/parser.rs,
+/// `ICalendarValueType::Date` / `token.into_ical_date()`) leaves hour unset
+/// precisely for VALUE=DATE / date-only DTSTART values).
+fn is_all_day_start(comp: &ICalendarComponent) -> bool {
+    comp.property(&ICalendarProperty::Dtstart)
+        .and_then(|entry| entry.values.first())
+        .is_some_and(
+            |value| matches!(value, ICalendarValue::PartialDateTime(pdt) if pdt.hour.is_none()),
+        )
+}
+
 fn rrule_prop(comp: &ICalendarComponent) -> Option<String> {
     comp.property(&ICalendarProperty::Rrule)
         .and_then(|entry| entry.values.first())
@@ -293,8 +326,23 @@ fn event_from_component(comp: &ICalendarComponent) -> Result<Event> {
         .ok_or_else(|| Error::ICal("VEVENT missing UID".into()))?;
     let start = datetime_prop(comp, ICalendarProperty::Dtstart)
         .ok_or_else(|| Error::ICal("VEVENT missing DTSTART".into()))?;
-    let end = datetime_prop(comp, ICalendarProperty::Dtend)
-        .ok_or_else(|| Error::ICal("VEVENT missing DTEND".into()))?;
+    // DTEND is OPTIONAL per RFC5545 §3.6.1, which defines a strict precedence for
+    // deriving the end when it's absent:
+    //   1. DTEND present -> use it.
+    //   2. else DURATION present -> end = start + duration.
+    //   3. else DTSTART is a DATE value (all-day) -> end = start + 1 day.
+    //   4. else (DATE-TIME DTSTART, no DTEND/DURATION) -> nil duration, end = start.
+    // Real Fastmail data omits DTEND in favor of DURATION or all-day DTSTART, so
+    // this must be handled precisely rather than always collapsing to start.
+    let end = if let Some(dtend) = datetime_prop(comp, ICalendarProperty::Dtend) {
+        dtend
+    } else if let Some(duration) = duration_prop(comp) {
+        start + duration
+    } else if is_all_day_start(comp) {
+        start + chrono::TimeDelta::days(1)
+    } else {
+        start
+    };
     let summary = text_prop(comp, ICalendarProperty::Summary).unwrap_or_default();
     let location = text_prop(comp, ICalendarProperty::Location);
     let description = text_prop(comp, ICalendarProperty::Description);
@@ -457,5 +505,88 @@ END:VCALENDAR\r\n";
         let insts = expand_event(SAMPLE_EVENT, start, end).expect("expand");
         assert_eq!(insts.len(), 3);
         assert!(insts.iter().all(|e| e.is_instance));
+    }
+
+    #[test]
+    fn parse_event_without_dtend_defaults_to_dtstart() {
+        // Regression test for the DTEND-optional fix (RFC5545 3.6.1 permits an
+        // event to omit DTEND entirely). Real Fastmail data includes such events.
+        // This is branch 4 of the precedence: DATE-TIME DTSTART, no DTEND, no
+        // DURATION -> nil-duration event ending at DTSTART.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-no-dtend\r\nSUMMARY:No End\r\n\
+DTSTART:20260803T090000Z\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("VEVENT without DTEND must still parse");
+        assert_eq!(ev.end, ev.start);
+    }
+
+    #[test]
+    fn event_with_duration_no_dtend() {
+        // Branch 2 of the RFC5545 3.6.1 precedence: no DTEND but a DURATION ->
+        // end = start + duration.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-duration\r\nSUMMARY:Timed\r\n\
+DTSTART:20260803T090000Z\r\nDURATION:PT1H\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("parse");
+        assert_eq!(
+            ev.start,
+            "2026-08-03T09:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        assert_eq!(
+            ev.end,
+            "2026-08-03T10:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn event_with_day_duration_no_dtend() {
+        // Same branch as above but exercising the DURATION "days" field (as
+        // opposed to hours/minutes/seconds) to make sure it's wired up too.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-duration-days\r\nSUMMARY:Multi-day\r\n\
+DTSTART:20260803T090000Z\r\nDURATION:P1D\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("parse");
+        assert_eq!(
+            ev.end,
+            "2026-08-04T09:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn all_day_event_no_dtend() {
+        // Branch 3 of the RFC5545 3.6.1 precedence: DTSTART is a DATE value (no
+        // time-of-day) and neither DTEND nor DURATION is present -> the event
+        // spans a single day, end = start + 1 day.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-all-day\r\nSUMMARY:All Day\r\n\
+DTSTART;VALUE=DATE:20260803\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("parse");
+        assert_eq!(
+            ev.start,
+            "2026-08-03T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        assert_eq!(
+            ev.end,
+            "2026-08-04T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn dtend_present_wins_over_duration_and_all_day() {
+        // Branch 1: an explicit DTEND always takes precedence, even though this
+        // fixture happens to also be a plausible all-day-shaped DTSTART.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-dtend-wins\r\nSUMMARY:Explicit End\r\n\
+DTSTART;VALUE=DATE:20260803\r\nDTEND;VALUE=DATE:20260805\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("parse");
+        assert_eq!(
+            ev.end,
+            "2026-08-05T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
     }
 }
