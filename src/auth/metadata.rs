@@ -147,7 +147,14 @@ fn challenge(st: &AuthState) -> Response {
     (StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, header)]).into_response()
 }
 
+/// GET /healthz - unauthenticated liveness probe for the container/orchestrator.
+/// Served in every auth mode; never gated by `require_auth`.
+pub async fn healthz() -> &'static str {
+    "ok"
+}
+
 /// Compose the app router for the selected auth mode.
+/// - `/healthz` is always public, in every mode.
 /// - `Some(state)` with `jwt_mode == true`: public PRM route + `/mcp` gated by `require_auth`.
 /// - `Some(state)` with `jwt_mode == false` (token mode): `/mcp` gated, no PRM route.
 /// - `None` (AUTH_MODE=none): `/mcp` served open, no PRM route, no gating.
@@ -156,12 +163,14 @@ fn challenge(st: &AuthState) -> Response {
 /// /mcp MCP service).
 pub fn build_router(protected: Router<()>, auth: Option<AuthState>) -> Router {
     match auth {
-        None => protected,
+        None => Router::new()
+            .route("/healthz", get(healthz))
+            .merge(protected),
         Some(state) => {
             // `route_layer` (not `layer`) so the middleware only wraps
             // matched routes; unmatched paths (e.g. the PRM path in token
-            // mode) fall through to axum's default 404 instead of being
-            // challenged for auth first.
+            // mode, or /healthz) fall through to axum's default 404 instead
+            // of being challenged for auth first.
             let gated = protected.route_layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 require_auth,
@@ -170,16 +179,20 @@ pub fn build_router(protected: Router<()>, auth: Option<AuthState>) -> Router {
                 // `gated` is `Router<()>` (the auth middleware carries its own
                 // state directly, independent of the router's state type), so
                 // reinterpret it as `Router<AuthState>` via `with_state(())`
-                // before merging it into the PRM sub-router.
+                // before merging it into the public sub-router. `Router::new()`
+                // here infers `S = AuthState` because of the PRM route below;
+                // `/healthz` (a state-free handler) is happy with any `S`.
                 Router::new()
+                    .route("/healthz", get(healthz))
                     .route("/.well-known/oauth-protected-resource", get(prm_handler))
                     .merge(gated.with_state(()))
                     .with_state(state)
             } else {
                 // No PRM route in token mode; `gated` is already `Router<()>`
-                // (the middleware carries its own state), so it needs no
+                // (the middleware carries its own state), so the public
+                // `/healthz` router stays `Router<()>` too and needs no
                 // further `with_state` call.
-                gated
+                Router::new().route("/healthz", get(healthz)).merge(gated)
             }
         }
     }
@@ -288,6 +301,22 @@ mod build_router_tests {
             .await
             .unwrap();
         assert_eq!(prm.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn healthz_is_public_in_all_modes() {
+        let apps = vec![
+            build_router(dummy(), None),
+            build_router(dummy(), Some(state(false).await)),
+            build_router(dummy(), Some(state(true).await)),
+        ];
+        for app in apps {
+            let r = app
+                .oneshot(HttpRequest::get("/healthz").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::OK);
+        }
     }
 
     /// Production nests the MCP service (`nest_service("/mcp", ...)`), which
