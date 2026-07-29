@@ -101,6 +101,11 @@ impl JwksKeySource {
             cache: RwLock::new(HashMap::new()),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
+                // Pin to compiled-in Mozilla roots so cert verification never
+                // touches the filesystem -- see `crate::tls` for why.
+                .tls_certs_only(
+                    crate::tls::webpki_roots().expect("compiled-in root CAs should parse"),
+                )
                 .build()
                 .expect("build reqwest client"),
         }

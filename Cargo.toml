@@ -9,6 +9,7 @@ axum = "0.8"
 tower = "0.5"
 rmcp = { version = "0.9", features = ["server", "macros", "transport-streamable-http-server"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+webpki-root-certs = "1"
 quick-xml = "0.37"
 calcard = "0.1"
 jsonwebtoken = "10"
