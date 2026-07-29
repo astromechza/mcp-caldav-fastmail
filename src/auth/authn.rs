@@ -6,28 +6,32 @@
 use crate::auth::validator::{JwksKeySource, JwtValidator, StaticKeySource};
 use crate::config::{AuthConfig, JwtKeySource};
 use crate::error::Result;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
 /// Constant-time shared-secret bearer check (token mode).
+///
+/// Stores the SHA-256 digest of the secret rather than the secret itself, so
+/// `check` can compare two fixed-length (32-byte) digests. This avoids the
+/// length-dependent early-return that would otherwise leak the secret's
+/// length via timing.
 pub struct TokenChecker {
-    secret: Vec<u8>,
+    secret_digest: [u8; 32],
 }
 
 impl TokenChecker {
     pub fn new(secret: String) -> Self {
         Self {
-            secret: secret.into_bytes(),
+            secret_digest: Sha256::digest(secret.as_bytes()).into(),
         }
     }
 
+    /// Constant-time: compares fixed-length SHA-256 digests, so neither the
+    /// content nor the length of the secret leaks via timing.
     pub fn check(&self, presented: &str) -> bool {
-        let p = presented.as_bytes();
-        // Length is not secret here; bail early if it differs (ct_eq needs equal len).
-        if p.len() != self.secret.len() {
-            return false;
-        }
-        p.ct_eq(&self.secret).into()
+        let p: [u8; 32] = Sha256::digest(presented.as_bytes()).into();
+        p.ct_eq(&self.secret_digest).into()
     }
 }
 
@@ -201,6 +205,34 @@ mod tests {
         assert!(
             a.verify(&token).await,
             "signature+exp only (no iss/aud/scope) should pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn jwt_static_pem_no_iss_claim_passes_when_issuer_none() {
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+        let priv_pem = include_str!("testdata/test_priv.pem");
+        let mut h = Header::new(Algorithm::RS256);
+        h.kid = Some("test".into());
+        // No `iss` claim at all in the token; validator has issuer=None -> not checked.
+        let claims = serde_json::json!({"sub":"u","exp":9_999_999_999u64});
+        let token = encode(
+            &h,
+            &claims,
+            &EncodingKey::from_rsa_pem(priv_pem.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let cfg = AuthConfig::Jwt {
+            resource: "https://mcp.x".into(),
+            source: JwtKeySource::PublicKeyPem("src/auth/testdata/test_pub.pem".into()),
+            issuer: None,
+            audience: None,
+            required_scope: None,
+        };
+        let a = Authenticator::from_config(&cfg).await.unwrap().unwrap();
+        assert!(
+            a.verify(&token).await,
+            "missing iss claim should pass when issuer enforcement is off"
         );
     }
 }

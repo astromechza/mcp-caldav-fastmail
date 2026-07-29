@@ -72,21 +72,29 @@ impl std::fmt::Debug for Config {
 
 impl Config {
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
-        let bind_addr = get("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8080".into());
-        let fastmail_username = get("FASTMAIL_USERNAME")
+        // Treat an empty-string env var as unset. Deployment tooling (docker-compose,
+        // k8s env-from-secret, etc.) commonly produces "" rather than omitting the
+        // variable entirely, and "" is never a meaningful value for any of the keys
+        // below. REQUIRED_SCOPE is the deliberate exception: its empty string is a
+        // real, distinct value (explicit scope-check opt-out), so it bypasses this
+        // helper and reads via `get` directly.
+        let getne = |k: &str| get(k).filter(|s| !s.trim().is_empty());
+
+        let bind_addr = getne("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8080".into());
+        let fastmail_username = getne("FASTMAIL_USERNAME")
             .ok_or_else(|| Error::Config("missing env FASTMAIL_USERNAME".into()))?;
-        let fastmail_app_password = get("FASTMAIL_APP_PASSWORD")
+        let fastmail_app_password = getne("FASTMAIL_APP_PASSWORD")
             .ok_or_else(|| Error::Config("missing env FASTMAIL_APP_PASSWORD".into()))?;
         let caldav_base_url =
-            get("CALDAV_BASE_URL").unwrap_or_else(|| "https://caldav.fastmail.com/".into());
+            getne("CALDAV_BASE_URL").unwrap_or_else(|| "https://caldav.fastmail.com/".into());
 
         let mode = get("AUTH_MODE").unwrap_or_else(|| "jwt".into());
         let auth = match mode.as_str() {
             "jwt" => {
-                let resource = get("RESOURCE_URI")
+                let resource = getne("RESOURCE_URI")
                     .ok_or_else(|| Error::Config("jwt mode: missing RESOURCE_URI".into()))?;
-                let jwks = get("AUTH_JWKS_URI");
-                let pem = get("AUTH_JWT_PUBLIC_KEY");
+                let jwks = getne("AUTH_JWKS_URI");
+                let pem = getne("AUTH_JWT_PUBLIC_KEY");
                 let source = match (jwks, pem) {
                     (Some(u), None) => JwtKeySource::Jwks(u),
                     (None, Some(k)) => JwtKeySource::PublicKeyPem(k),
@@ -103,10 +111,10 @@ impl Config {
                     }
                 };
                 AuthConfig::Jwt {
-                    audience: get("AUTH_JWT_AUDIENCE").or_else(|| Some(resource.clone())),
+                    audience: getne("AUTH_JWT_AUDIENCE").or_else(|| Some(resource.clone())),
                     resource,
                     source,
-                    issuer: get("AUTH_JWT_ISSUER"),
+                    issuer: getne("AUTH_JWT_ISSUER"),
                     required_scope: match get("REQUIRED_SCOPE") {
                         Some(s) if s.is_empty() => None, // explicit opt-out (REQUIRED_SCOPE="")
                         Some(s) => Some(s),              // custom scope
@@ -115,8 +123,7 @@ impl Config {
                 }
             }
             "token" => {
-                let secret = get("MCP_TOKEN")
-                    .filter(|s| !s.is_empty())
+                let secret = getne("MCP_TOKEN")
                     .ok_or_else(|| Error::Config("token mode: missing MCP_TOKEN".into()))?;
                 if secret.len() < 32 {
                     tracing::warn!("MCP_TOKEN is short (<32 chars); use a long random secret");
@@ -293,6 +300,27 @@ mod tests {
             AuthConfig::Jwt { required_scope, .. } => {
                 assert_eq!(required_scope.as_deref(), Some("events"));
             }
+            _ => panic!("expected jwt"),
+        }
+    }
+
+    #[test]
+    fn empty_key_source_treated_as_unset() {
+        let mut v = fastmail();
+        v.push(("RESOURCE_URI", "https://mcp.x"));
+        v.push(("AUTH_JWKS_URI", ""));
+        assert!(Config::from_lookup(look(v)).is_err());
+    }
+
+    #[test]
+    fn empty_issuer_is_none() {
+        let mut v = fastmail();
+        v.push(("RESOURCE_URI", "https://mcp.x"));
+        v.push(("AUTH_JWKS_URI", "https://i/jwks"));
+        v.push(("AUTH_JWT_ISSUER", ""));
+        let cfg = Config::from_lookup(look(v)).unwrap();
+        match cfg.auth {
+            AuthConfig::Jwt { issuer, .. } => assert_eq!(issuer, None),
             _ => panic!("expected jwt"),
         }
     }

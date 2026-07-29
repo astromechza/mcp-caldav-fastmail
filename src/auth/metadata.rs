@@ -14,11 +14,11 @@ pub struct ProtectedResourceMetadata {
 }
 
 impl ProtectedResourceMetadata {
-    pub fn new(resource: String, issuer: String, scope: String) -> Self {
+    pub fn new(resource: String, issuer: Option<String>, scope: Option<String>) -> Self {
         Self {
             resource,
-            authorization_servers: vec![issuer],
-            scopes_supported: vec![scope],
+            authorization_servers: issuer.into_iter().collect(),
+            scopes_supported: scope.into_iter().collect(),
             bearer_methods_supported: vec!["header".into()],
         }
     }
@@ -37,13 +37,21 @@ mod tests {
     fn prm_serializes_expected_fields() {
         let prm = ProtectedResourceMetadata::new(
             "https://mcp.example.com".into(),
-            "https://auth.example.com".into(),
-            "caldav".into(),
+            Some("https://auth.example.com".into()),
+            Some("caldav".into()),
         );
         let json = serde_json::to_value(&prm).unwrap();
         assert_eq!(json["resource"], "https://mcp.example.com");
         assert_eq!(json["authorization_servers"][0], "https://auth.example.com");
         assert_eq!(json["bearer_methods_supported"][0], "header");
+    }
+
+    #[test]
+    fn prm_omits_unset_issuer_and_scope() {
+        let prm = ProtectedResourceMetadata::new("https://mcp.x".into(), None, None);
+        let json = serde_json::to_value(&prm).unwrap();
+        assert_eq!(json["authorization_servers"], serde_json::json!([]));
+        assert_eq!(json["scopes_supported"], serde_json::json!([]));
     }
 
     #[test]
@@ -96,8 +104,8 @@ pub struct AuthState {
 pub async fn prm_handler(State(st): State<AuthState>) -> Json<ProtectedResourceMetadata> {
     Json(ProtectedResourceMetadata::new(
         st.resource.clone(),
-        st.issuer.clone().unwrap_or_default(),
-        st.scope.clone().unwrap_or_else(|| "caldav".into()),
+        st.issuer.clone(),
+        st.scope.clone(),
     ))
 }
 

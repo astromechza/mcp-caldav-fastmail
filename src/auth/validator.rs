@@ -12,7 +12,8 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Claims {
     pub sub: String,
-    pub iss: String,
+    #[serde(default)]
+    pub iss: Option<String>,
     #[serde(default)]
     pub aud: Option<Aud>,
     pub exp: usize,
