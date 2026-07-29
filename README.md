@@ -49,7 +49,7 @@ All configuration is via environment variables (`src/config.rs`):
 | `AUTH_JWT_PUBLIC_KEY` | jwt | one of this or `AUTH_JWKS_URI` **required** | A static RSA public key — inline PEM text or a filesystem path to a PEM file. Use this when you mint tokens offline instead of running a full OIDC issuer. |
 | `AUTH_JWT_ISSUER` | jwt | optional | Expected `iss` claim. If unset, the issuer is not checked. |
 | `AUTH_JWT_AUDIENCE` | jwt | optional, defaults to `RESOURCE_URI` | Expected `aud` claim. Since it always defaults to `RESOURCE_URI`, audience is effectively always checked in `jwt` mode unless you point it somewhere other than `RESOURCE_URI` on purpose. |
-| `REQUIRED_SCOPE` | jwt | optional | OAuth scope the access token's `scope` claim must carry. If unset, scope is not checked. |
+| `REQUIRED_SCOPE` | jwt | default `caldav` | OAuth scope the access token's `scope` claim must carry. Set `REQUIRED_SCOPE=""` to disable the check — useful for minimal offline-minted static-key tokens that don't carry a scope claim. |
 | `MCP_TOKEN` | token | **required, secret** | Shared bearer secret. Compared in constant time. Use a long random value (a warning is logged if it's under 32 characters). |
 
 `exp` (expiry) is always enforced in `jwt` mode regardless of the other
@@ -83,10 +83,12 @@ Validates RS256 JWTs from one of two key sources — set exactly one:
 
 `exp` is always enforced, and so is `aud` — `AUTH_JWT_AUDIENCE` always
 defaults to `RESOURCE_URI`, so there is no env-var combination that skips
-the audience check. `iss` is only checked if `AUTH_JWT_ISSUER` is set, and
-`REQUIRED_SCOPE` is only checked if set — so a minimal `AUTH_JWT_PUBLIC_KEY`
-setup with no issuer/scope configured still requires a correctly signed,
-unexpired token whose `aud` matches `RESOURCE_URI`.
+the audience check. `iss` is only checked if `AUTH_JWT_ISSUER` is set.
+`REQUIRED_SCOPE` defaults to `caldav` and is only skipped if explicitly set
+to an empty string (`REQUIRED_SCOPE=""`) — so a minimal `AUTH_JWT_PUBLIC_KEY`
+setup with no issuer configured still requires a correctly signed,
+unexpired token whose `aud` matches `RESOURCE_URI` and whose `scope` claim
+carries `caldav`, unless scope checking is explicitly disabled.
 
 The server serves the PRM document at
 `/.well-known/oauth-protected-resource` (unauthenticated), and a 401 on

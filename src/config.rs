@@ -107,7 +107,11 @@ impl Config {
                     resource,
                     source,
                     issuer: get("AUTH_JWT_ISSUER"),
-                    required_scope: get("REQUIRED_SCOPE"),
+                    required_scope: match get("REQUIRED_SCOPE") {
+                        Some(s) if s.is_empty() => None, // explicit opt-out (REQUIRED_SCOPE="")
+                        Some(s) => Some(s),               // custom scope
+                        None => Some("caldav".into()),    // secure default (matches base behavior)
+                    },
                 }
             }
             "token" => {
@@ -249,6 +253,45 @@ mod tests {
         match cfg.auth {
             AuthConfig::Jwt { audience, .. } => {
                 assert_eq!(audience.as_deref(), Some("https://mcp.x"))
+            }
+            _ => panic!("expected jwt"),
+        }
+    }
+
+    #[test]
+    fn required_scope_defaults_and_optout() {
+        // No REQUIRED_SCOPE set -> secure default "caldav".
+        let mut v = fastmail();
+        v.push(("RESOURCE_URI", "https://mcp.x"));
+        v.push(("AUTH_JWKS_URI", "u"));
+        let cfg = Config::from_lookup(look(v)).unwrap();
+        match cfg.auth {
+            AuthConfig::Jwt { required_scope, .. } => {
+                assert_eq!(required_scope.as_deref(), Some("caldav"));
+            }
+            _ => panic!("expected jwt"),
+        }
+
+        // REQUIRED_SCOPE="" -> explicit opt-out, no scope check.
+        let mut v = fastmail();
+        v.push(("RESOURCE_URI", "https://mcp.x"));
+        v.push(("AUTH_JWKS_URI", "u"));
+        v.push(("REQUIRED_SCOPE", ""));
+        let cfg = Config::from_lookup(look(v)).unwrap();
+        match cfg.auth {
+            AuthConfig::Jwt { required_scope, .. } => assert_eq!(required_scope, None),
+            _ => panic!("expected jwt"),
+        }
+
+        // REQUIRED_SCOPE=events -> custom scope honored.
+        let mut v = fastmail();
+        v.push(("RESOURCE_URI", "https://mcp.x"));
+        v.push(("AUTH_JWKS_URI", "u"));
+        v.push(("REQUIRED_SCOPE", "events"));
+        let cfg = Config::from_lookup(look(v)).unwrap();
+        match cfg.auth {
+            AuthConfig::Jwt { required_scope, .. } => {
+                assert_eq!(required_scope.as_deref(), Some("events"));
             }
             _ => panic!("expected jwt"),
         }
