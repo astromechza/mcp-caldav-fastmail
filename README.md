@@ -292,6 +292,101 @@ All 11 tools are registered in `src/mcp/tools.rs`:
 scheduling (invites, RSVPs), a JSCalendar/JMAP-native path, and multi-user
 support.
 
+## Deployment
+
+### Build
+
+```bash
+docker build -t mcp-caldav-fastmail .
+```
+
+`podman build -t mcp-caldav-fastmail .` works identically — the `Dockerfile`
+has no Docker-specific features.
+
+The runtime image is `gcr.io/distroless/cc-debian12` (~45MB): glibc + libgcc
++ CA certificates + tzdata, no shell or package manager. It's a native glibc
+build rather than static-musl-on-`scratch` because `aws-lc-sys` (BoringSSL
+C/asm, pulled in via rustls) doesn't cross-compile under `musl-gcc`. TLS
+roots (`webpki-root-certs`) and timezone data (`chrono-tz`) are compiled
+into the binary, so trust and TZID resolution don't depend on the image
+filesystem either way.
+
+### Run
+
+```bash
+docker run -p 8080:8080 \
+  -e AUTH_MODE=... \
+  -e FASTMAIL_USERNAME=... \
+  -e FASTMAIL_APP_PASSWORD=... \
+  mcp-caldav-fastmail
+```
+
+Add the mode-specific variables from the [Configuration](#configuration) table
+to the `docker run` invocation (e.g. `-e MCP_TOKEN=...` for `token` mode, or
+`-e RESOURCE_URI=... -e AUTH_JWKS_URI=...` for `jwt` mode).
+
+`token` mode example:
+
+```bash
+docker run -p 8080:8080 \
+  -e AUTH_MODE=token \
+  -e MCP_TOKEN="$(openssl rand -base64 32)" \
+  -e FASTMAIL_USERNAME=you@fastmail.com \
+  -e FASTMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx \
+  mcp-caldav-fastmail
+```
+
+`none` mode example (only behind an authenticating edge — see
+[`none`](#none) above):
+
+```bash
+docker run -p 8080:8080 \
+  -e AUTH_MODE=none \
+  -e FASTMAIL_USERNAME=you@fastmail.com \
+  -e FASTMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx \
+  mcp-caldav-fastmail
+```
+
+See [Configuration](#configuration) for the full env var table — `jwt` mode
+additionally needs `RESOURCE_URI` and either `AUTH_JWKS_URI` or
+`AUTH_JWT_PUBLIC_KEY`.
+
+### Pull from GHCR
+
+```bash
+docker pull ghcr.io/astromechza/mcp-caldav-fastmail:latest
+```
+
+Available tags: `latest` and `sha-<short>` (both from every push to `main`),
+and semver tags (`vX.Y.Z`, `vX.Y`) from `v*` release tags.
+
+Note: the first publish to GHCR creates a **private** package. Until a repo
+maintainer makes it public and links it to this repository (once, in the
+package's GHCR settings), anonymous `docker pull` will fail with
+authentication errors.
+
+### Health check
+
+`GET /healthz` returns `200` unauthenticated in every `AUTH_MODE` — use it
+as the container/orchestrator liveness probe.
+
+### CI/CD
+
+- `.github/workflows/ci.yml` — runs `cargo fmt --check`, `cargo clippy -D
+  warnings`, and `cargo test` on every PR and on push to `main`.
+- `.github/workflows/release.yml` — builds and pushes the image to
+  `ghcr.io/astromechza/mcp-caldav-fastmail` on push to `main` (`latest` +
+  `sha-<short>`) and on `v*` tags (semver).
+
+### Scaleway
+
+Intended deployment target is a private Scaleway Serverless Container,
+reachable only through an IAM-gated edge that injects `X-Auth-Token` — pair
+that with `AUTH_MODE=none` since the edge already authenticates, or run
+`AUTH_MODE=token`/`AUTH_MODE=jwt` for defense in depth if the edge is
+bypassable. Full Terraform for this (`scaleway_container` + IAM + secret
+env) is a planned follow-up, not included yet.
+
 ## Development
 
 ```bash

@@ -49,6 +49,9 @@ impl FastmailCalDav {
             .map_err(|e| Error::Config(format!("invalid CalDAV base URL {base_url:?}: {e}")))?;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            // Pin to compiled-in Mozilla roots so cert verification never
+            // touches the filesystem -- see `crate::tls` for why.
+            .tls_certs_only(crate::tls::webpki_roots()?)
             .build()
             .map_err(|e| Error::Config(format!("failed to build HTTP client: {e}")))?;
         Ok(Self {

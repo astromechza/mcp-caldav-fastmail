@@ -178,7 +178,7 @@ pub fn expand_event(ics: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> Resu
             });
         }
     }
-    out.sort_by(|a, b| a.start.cmp(&b.start));
+    out.sort_by_key(|e| e.start);
     Ok(out)
 }
 
