@@ -145,7 +145,12 @@ pub fn parse_multistatus(xml: &str) -> Result<Vec<DavResponse>> {
                 if container.is_none()
                     && let (Some(resp), Some(prop)) = (cur.as_mut(), cur_prop.as_ref())
                 {
-                    let text = String::from_utf8_lossy(&t.into_inner()).into_owned();
+                    // Trim to match `Text` handling: `trim_text(true)` only
+                    // applies to Text events, so trim CDATA ourselves or the same
+                    // property parses differently depending on how the server
+                    // wraps it (e.g. indented/newline'd CDATA).
+                    let raw = String::from_utf8_lossy(&t.into_inner()).into_owned();
+                    let text = raw.trim().to_string();
                     if prop == "href" && resp.href.is_empty() {
                         resp.href = text;
                     } else {
@@ -409,11 +414,15 @@ mod tests {
   <response>
     <href>/dav/calendars/user/me/work/</href>
     <propstat><prop>
-      <displayname><![CDATA[My Cal]]></displayname>
+      <displayname><![CDATA[
+        My Cal
+      ]]></displayname>
     </prop></propstat>
   </response>
 </multistatus>"#;
         let rs = parse_multistatus(xml).expect("parse");
+        // Surrounding whitespace/newlines inside the CDATA are trimmed, matching
+        // how trim_text(true) handles plain Text nodes.
         assert_eq!(rs[0].prop("displayname").as_deref(), Some("My Cal"));
     }
 
