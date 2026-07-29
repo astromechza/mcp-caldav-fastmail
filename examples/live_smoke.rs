@@ -20,7 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "set FASTMAIL_APP_PASSWORD (e.g. via a gitignored .env)")?;
     let base_url = std::env::var("CALDAV_BASE_URL")
         .unwrap_or_else(|_| "https://caldav.fastmail.com/".to_string());
-    let days: i64 = std::env::var("DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(7);
+    let days: i64 = std::env::var("DAYS")
+        .ok()
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(7);
 
     let client = FastmailCalDav::new(&base_url, &username, &app_password)?;
 
@@ -60,7 +63,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         e.start.format("%Y-%m-%d %H:%M"),
                         e.end.format("%H:%M"),
                         e.summary,
-                        if e.is_instance { "  [recurring instance]" } else { "" },
+                        if e.is_instance {
+                            "  [recurring instance]"
+                        } else {
+                            ""
+                        },
                     );
                 }
             }
