@@ -377,6 +377,8 @@ as the container/orchestrator liveness probe.
 - `.github/workflows/release.yml` — builds and pushes the image to
   `ghcr.io/astromechza/mcp-caldav-fastmail` on push to `main` (`latest` +
   `sha-<short>`) and on `v*` tags (semver).
+- `.github/workflows/release-please.yml` — maintains the release PR and
+  publishes versioned images on merge; see [Releases](#releases) below.
 
 ### Scaleway
 
@@ -386,6 +388,22 @@ that with `AUTH_MODE=none` since the edge already authenticates, or run
 `AUTH_MODE=token`/`AUTH_MODE=jwt` for defense in depth if the edge is
 bypassable. Full Terraform for this (`scaleway_container` + IAM + secret
 env) is a planned follow-up, not included yet.
+
+## Releases
+
+Versioning is driven by [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat:`, `fix:`, `chore:`, etc.) via [release-please](https://github.com/googleapis/release-please).
+On every push to `main`, `.github/workflows/release-please.yml` keeps a
+standing "release PR" up to date with the next version bump (`Cargo.toml` +
+`Cargo.lock`) and an updated `CHANGELOG.md`. Merging that PR:
+
+- tags the repo `vX.Y.Z` and creates a GitHub Release with the changelog entry
+- publishes `ghcr.io/astromechza/mcp-caldav-fastmail:X.Y.Z` (plus `X.Y` and
+  `latest`) in the same workflow run
+
+`main` also continuously publishes `latest` and `sha-<short>` via
+`release.yml` on every push, independent of releases — useful for testing
+unreleased changes.
 
 ## Development
 
