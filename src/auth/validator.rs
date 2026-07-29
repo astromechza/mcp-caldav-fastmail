@@ -13,7 +13,8 @@ use tokio::sync::RwLock;
 pub struct Claims {
     pub sub: String,
     pub iss: String,
-    pub aud: Aud,
+    #[serde(default)]
+    pub aud: Option<Aud>,
     pub exp: usize,
     #[serde(default)]
     pub scope: String,
@@ -44,17 +45,17 @@ pub trait KeySource: Send + Sync {
 
 pub struct JwtValidator {
     keys: Arc<dyn KeySource>,
-    issuer: String,
-    audience: String,
-    required_scope: String,
+    issuer: Option<String>,
+    audience: Option<String>,
+    required_scope: Option<String>,
 }
 
 impl JwtValidator {
     pub fn new(
         keys: Arc<dyn KeySource>,
-        issuer: String,
-        audience: String,
-        required_scope: String,
+        issuer: Option<String>,
+        audience: Option<String>,
+        required_scope: Option<String>,
     ) -> Self {
         Self {
             keys,
@@ -71,20 +72,24 @@ impl JwtValidator {
         let key = self.keys.key(&kid).await?;
 
         let mut v = Validation::new(Algorithm::RS256);
-        v.set_issuer(&[&self.issuer]);
-        v.set_audience(&[&self.audience]);
+        if let Some(issuer) = &self.issuer {
+            v.set_issuer(&[issuer]);
+        }
+        if let Some(audience) = &self.audience {
+            v.set_audience(&[audience]);
+        } else {
+            v.validate_aud = false;
+        }
         let data = decode::<Claims>(token, &key, &v).map_err(|e| Error::Auth(e.to_string()))?;
 
-        if !data
-            .claims
-            .scope
-            .split_whitespace()
-            .any(|s| s == self.required_scope)
+        if let Some(required_scope) = &self.required_scope
+            && !data
+                .claims
+                .scope
+                .split_whitespace()
+                .any(|s| s == required_scope)
         {
-            return Err(Error::Auth(format!(
-                "missing scope {}",
-                self.required_scope
-            )));
+            return Err(Error::Auth(format!("missing scope {required_scope}")));
         }
         Ok(data.claims)
     }
@@ -139,6 +144,37 @@ impl KeySource for JwksKeySource {
     }
 }
 
+/// A KeySource backed by a single static public key (any kid resolves to it).
+/// Used for the AUTH_JWT_PUBLIC_KEY mode where we hold only the public key.
+pub struct StaticKeySource {
+    key: DecodingKey,
+}
+
+impl StaticKeySource {
+    /// Accepts inline PEM text (starts with "-----BEGIN") or a filesystem path to a PEM file.
+    pub fn from_pem_or_path(pem_or_path: &str) -> Result<Self> {
+        let pem: Vec<u8> = if pem_or_path.trim_start().starts_with("-----BEGIN") {
+            pem_or_path.as_bytes().to_vec()
+        } else {
+            std::fs::read(pem_or_path).map_err(|e| {
+                Error::Config(format!(
+                    "reading AUTH_JWT_PUBLIC_KEY file {pem_or_path:?}: {e}"
+                ))
+            })?
+        };
+        let key = DecodingKey::from_rsa_pem(&pem)
+            .map_err(|e| Error::Config(format!("invalid RSA public key PEM: {e}")))?;
+        Ok(Self { key })
+    }
+}
+
+#[async_trait::async_trait]
+impl KeySource for StaticKeySource {
+    async fn key(&self, _kid: &str) -> Result<DecodingKey> {
+        Ok(self.key.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,9 +210,9 @@ mod tests {
         let key = DecodingKey::from_rsa_pem(PUB.as_bytes()).unwrap();
         JwtValidator::new(
             Arc::new(StaticKey(key)),
-            "https://auth.example.com".into(),
-            "https://mcp.example.com".into(),
-            "caldav".into(),
+            Some("https://auth.example.com".into()),
+            Some("https://mcp.example.com".into()),
+            Some("caldav".into()),
         )
     }
 

@@ -170,9 +170,9 @@ mod middleware_tests {
         AuthState {
             validator: Arc::new(JwtValidator::new(
                 Arc::new(UnusedKeySource),
-                "https://auth.example.com".into(),
-                "https://mcp.example.com".into(),
-                "caldav".into(),
+                Some("https://auth.example.com".into()),
+                Some("https://mcp.example.com".into()),
+                Some("caldav".into()),
             )),
             prm_url: "https://mcp.example.com/.well-known/oauth-protected-resource".into(),
             resource: "https://mcp.example.com".into(),
@@ -236,9 +236,9 @@ mod build_router_tests {
         AuthState {
             validator: Arc::new(JwtValidator::new(
                 Arc::new(UnusedKeySource),
-                "https://auth.example.com".into(),
-                "https://mcp.example.com".into(),
-                "caldav".into(),
+                Some("https://auth.example.com".into()),
+                Some("https://mcp.example.com".into()),
+                Some("caldav".into()),
             )),
             prm_url: "https://mcp.example.com/.well-known/oauth-protected-resource".into(),
             resource: "https://mcp.example.com".into(),
