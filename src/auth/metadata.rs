@@ -1,0 +1,169 @@
+//! RFC 9728 OAuth 2.0 Protected Resource Metadata, and the axum glue that
+//! challenges unauthenticated requests with a `WWW-Authenticate` header
+//! pointing clients at the metadata document.
+
+use serde::Serialize;
+
+/// RFC 9728 protected-resource-metadata document.
+#[derive(Debug, Serialize)]
+pub struct ProtectedResourceMetadata {
+    pub resource: String,
+    pub authorization_servers: Vec<String>,
+    pub scopes_supported: Vec<String>,
+    pub bearer_methods_supported: Vec<String>,
+}
+
+impl ProtectedResourceMetadata {
+    pub fn new(resource: String, issuer: String, scope: String) -> Self {
+        Self {
+            resource,
+            authorization_servers: vec![issuer],
+            scopes_supported: vec![scope],
+            bearer_methods_supported: vec!["header".into()],
+        }
+    }
+}
+
+/// The WWW-Authenticate header value pointing clients at the PRM document.
+pub fn www_authenticate(resource_metadata_url: &str) -> String {
+    format!(r#"Bearer resource_metadata="{resource_metadata_url}""#)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prm_serializes_expected_fields() {
+        let prm = ProtectedResourceMetadata::new(
+            "https://mcp.example.com".into(),
+            "https://auth.example.com".into(),
+            "caldav".into(),
+        );
+        let json = serde_json::to_value(&prm).unwrap();
+        assert_eq!(json["resource"], "https://mcp.example.com");
+        assert_eq!(json["authorization_servers"][0], "https://auth.example.com");
+        assert_eq!(json["bearer_methods_supported"][0], "header");
+    }
+
+    #[test]
+    fn challenge_header_points_at_metadata() {
+        let h = www_authenticate("https://mcp.example.com/.well-known/oauth-protected-resource");
+        assert!(h.starts_with("Bearer resource_metadata="));
+    }
+}
+
+use crate::auth::validator::JwtValidator;
+use axum::{
+    extract::{Request, State},
+    http::header::WWW_AUTHENTICATE,
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Json, Response},
+};
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct AuthState {
+    pub validator: Arc<JwtValidator>,
+    pub prm_url: String,
+    pub resource: String,
+    pub issuer: String,
+    pub scope: String,
+}
+
+/// GET /.well-known/oauth-protected-resource
+pub async fn prm_handler(State(st): State<AuthState>) -> Json<ProtectedResourceMetadata> {
+    Json(ProtectedResourceMetadata::new(
+        st.resource.clone(),
+        st.issuer.clone(),
+        st.scope.clone(),
+    ))
+}
+
+/// Middleware: require a valid bearer token, else 401 with challenge.
+pub async fn require_auth(State(st): State<AuthState>, req: Request, next: Next) -> Response {
+    let token = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    match token {
+        Some(t) => match st.validator.validate(&t).await {
+            Ok(_claims) => next.run(req).await,
+            Err(_) => challenge(&st),
+        },
+        None => challenge(&st),
+    }
+}
+
+fn challenge(st: &AuthState) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(WWW_AUTHENTICATE, www_authenticate(&st.prm_url))],
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod middleware_tests {
+    use super::*;
+    use crate::auth::validator::KeySource;
+    use crate::error::Result;
+    use axum::body::Body;
+    use axum::routing::get;
+    use axum::Router;
+    use jsonwebtoken::DecodingKey;
+    use tower::ServiceExt;
+
+    /// A KeySource that is never actually queried in these tests, since we
+    /// never send a well-formed bearer token through the middleware.
+    struct UnusedKeySource;
+    #[async_trait::async_trait]
+    impl KeySource for UnusedKeySource {
+        async fn key(&self, _kid: &str) -> Result<DecodingKey> {
+            unreachable!("no token is sent in this test, so no key lookup should occur")
+        }
+    }
+
+    fn test_state() -> AuthState {
+        AuthState {
+            validator: Arc::new(JwtValidator::new(
+                Arc::new(UnusedKeySource),
+                "https://auth.example.com".into(),
+                "https://mcp.example.com".into(),
+                "caldav".into(),
+            )),
+            prm_url: "https://mcp.example.com/.well-known/oauth-protected-resource".into(),
+            resource: "https://mcp.example.com".into(),
+            issuer: "https://auth.example.com".into(),
+            scope: "caldav".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_token_yields_401_with_challenge() {
+        let state = test_state();
+        let app = Router::new()
+            .route("/protected", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_auth,
+            ));
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/protected")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(resp.headers().get(WWW_AUTHENTICATE).is_some());
+    }
+}
