@@ -23,10 +23,11 @@
 # Timezone data for calcard TZID resolution is compiled in via chrono-tz.
 
 # Pin the builder to bookworm so its glibc matches distroless/cc-debian12
-# (also bookworm, glibc 2.36). An unpinned `rust:1.94-slim` is Debian trixie
-# (glibc 2.38+) and produces a binary that fails on the older runtime with
-# `libc.so.6: version 'GLIBC_2.38' not found`.
-FROM rust:1.94-slim-bookworm AS builder
+# (also bookworm, glibc 2.36). The default `-slim` (Debian trixie, glibc 2.38+)
+# produces a binary that fails on the older runtime with
+# `libc.so.6: version 'GLIBC_2.38' not found`. `rust:1-slim-bookworm` tracks the
+# latest Rust 1.x while staying on bookworm.
+FROM rust:1-slim-bookworm AS builder
 # aws-lc-sys (BoringSSL) needs a C toolchain + cmake to build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake perl ca-certificates \
