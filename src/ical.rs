@@ -18,11 +18,12 @@
 //! external `rrule` crate.
 
 use calcard::{
-    common::DateTimeResult,
+    common::{timezone::Tz, DateTimeResult},
     icalendar::{ICalendar, ICalendarComponent, ICalendarComponentType, ICalendarProperty, ICalendarValue},
     Entry, Parser,
 };
 use chrono::{DateTime, TimeZone, Utc};
+use std::str::FromStr;
 
 use crate::caldav::model::{Event, Todo};
 use crate::error::{Error, Result};
@@ -54,6 +55,9 @@ pub fn parse_todo(ics: &str) -> Result<Todo> {
 /// `ICalendar`, and adds no value for emitting a single fresh VEVENT. Hand-building
 /// keeps this side of the seam simple and decoupled from calcard's internal
 /// representation.
+///
+/// Note: output is intentionally not RFC5545 line-folded (no 75-octet continuation
+/// wrapping) - see module-level tests for the accepted round-trip guarantee.
 pub fn build_event(ev: &Event) -> String {
     let mut out = String::new();
     out.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mcp-caldav-fastmail//EN\r\nBEGIN:VEVENT\r\n");
@@ -80,6 +84,9 @@ pub fn build_event(ev: &Event) -> String {
 }
 
 /// Serialize a [`Todo`] as a complete VCALENDAR document wrapping a single VTODO.
+///
+/// Note: output is intentionally not RFC5545 line-folded (no 75-octet continuation
+/// wrapping) - see module-level tests for the accepted round-trip guarantee.
 pub fn build_todo(td: &Todo) -> String {
     let mut out = String::new();
     out.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mcp-caldav-fastmail//EN\r\nBEGIN:VTODO\r\n");
@@ -132,6 +139,12 @@ pub fn expand_event(ics: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> Resu
     // no notion of an end date itself. 10_000 comfortably covers any realistic
     // bounded (COUNT/UNTIL) series and gives a generous window for unbounded ones.
     let expanded = ical.expand_dates(Utc, 10_000);
+    if !expanded.errors.is_empty() {
+        tracing::warn!(
+            errors = ?expanded.errors,
+            "iCalendar recurrence expansion reported errors for one or more components"
+        );
+    }
 
     let duration = base.end - base.start;
     let mut out = Vec::new();
@@ -142,7 +155,9 @@ pub fn expand_event(ics: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> Resu
         let (start_ts, _) = occurrence.timestamps();
         let occ_start = DateTime::<Utc>::from_timestamp(start_ts, 0)
             .ok_or_else(|| Error::ICal("expanded occurrence had an invalid timestamp".into()))?;
-        if occ_start >= start && occ_start < end {
+        // Overlap check (not just "starts in window"): an instance that starts just
+        // before `start` but whose duration carries it into the window still counts.
+        if occ_start < end && occ_start + duration > start {
             out.push(Event {
                 uid: base.uid.clone(),
                 href: None,
@@ -189,13 +204,16 @@ fn text_prop(comp: &ICalendarComponent, prop: ICalendarProperty) -> Option<Strin
 }
 
 fn datetime_prop(comp: &ICalendarComponent, prop: ICalendarProperty) -> Option<DateTime<Utc>> {
-    comp.property(&prop)
-        .and_then(|entry| entry.values.first())
-        .and_then(|value| match value {
-            ICalendarValue::PartialDateTime(pdt) => pdt.to_date_time(),
-            _ => None,
-        })
-        .and_then(|result| date_time_result_to_utc(&result))
+    let entry = comp.property(&prop)?;
+    let ICalendarValue::PartialDateTime(pdt) = entry.values.first()? else {
+        return None;
+    };
+    let result = pdt.to_date_time()?;
+    // entry.tz_id() reads the TZID= parameter off this specific property (e.g.
+    // "DTSTART;TZID=Europe/London:..."), which to_date_time()/DateTimeResult alone
+    // knows nothing about - PartialDateTime only carries an explicit numeric
+    // UTC offset (from a "Z" or "+HHMM" suffix) in `result.offset`, never a TZID.
+    date_time_result_to_utc(&result, entry.tz_id())
 }
 
 fn rrule_prop(comp: &ICalendarComponent) -> Option<String> {
@@ -217,19 +235,38 @@ fn priority_prop(comp: &ICalendarComponent) -> Option<u8> {
     comp.property(&ICalendarProperty::Priority)
         .and_then(|entry| entry.values.first())
         .and_then(|value| value.as_integer())
-        .map(|i| i as u8)
+        .and_then(|i| u8::try_from(i).ok())
 }
 
-fn date_time_result_to_utc(result: &DateTimeResult) -> Option<DateTime<Utc>> {
-    match result.offset {
-        Some(offset) => offset
+/// Resolve a parsed date/time to a concrete UTC instant, honoring an explicit TZID
+/// parameter (e.g. `DTSTART;TZID=Europe/London:20260803T090000`) when present.
+///
+/// calcard parses the numeric fields (and any literal "Z"/"+HHMM" suffix) into
+/// `PartialDateTime`/`DateTimeResult`, but does not resolve `TZID=` itself - callers
+/// are expected to combine it with the entry's own `tz_id()`. This mirrors what
+/// calcard's own `ICalendarComponent::build_calendar_date` + `TzResolver` do
+/// internally for `expand_dates`, using calcard's `Tz` type (which already knows how
+/// to parse IANA zone names, Microsoft zone names, etc. via its `FromStr` impl).
+fn date_time_result_to_utc(result: &DateTimeResult, tz_id: Option<&str>) -> Option<DateTime<Utc>> {
+    if let Some(offset) = result.offset {
+        // An explicit numeric UTC offset (from "Z" or "+HHMM") always wins.
+        return offset
             .from_local_datetime(&result.date_time)
             .single()
-            .map(|dt| dt.with_timezone(&Utc)),
-        // No explicit UTC/fixed offset (a floating or TZID-relative time): best
-        // effort, treat the naive local time as if it were already UTC.
-        None => Some(Utc.from_utc_datetime(&result.date_time)),
+            .map(|dt| dt.with_timezone(&Utc));
     }
+
+    let tz = tz_id
+        .and_then(|name| Tz::from_str(name).ok())
+        .unwrap_or(Tz::Floating);
+    if matches!(tz, Tz::Floating) {
+        // Floating (no offset, no resolvable TZID): accepted deviation, best-effort
+        // treat the naive local time as if it were already UTC.
+        return Some(Utc.from_utc_datetime(&result.date_time));
+    }
+    tz.from_local_datetime(&result.date_time)
+        .single()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn event_from_component(comp: &ICalendarComponent) -> Result<Event> {
@@ -334,6 +371,26 @@ END:VCALENDAR\r\n";
         assert!(rrule.contains("FREQ=WEEKLY"), "rrule was: {rrule}");
         assert!(rrule.contains("COUNT=3"), "rrule was: {rrule}");
         assert!(rrule.contains("BYDAY=MO"), "rrule was: {rrule}");
+    }
+
+    #[test]
+    fn parse_event_resolves_tzid() {
+        // 2026-08-03 is in BST (UTC+1) - London is not in an ambiguous DST
+        // transition window on this date, so the offset is unambiguous.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-tz\r\nSUMMARY:London Meeting\r\n\
+DTSTART;TZID=Europe/London:20260803T090000\r\n\
+DTEND;TZID=Europe/London:20260803T100000\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("parse");
+        assert_eq!(
+            ev.start,
+            "2026-08-03T08:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        assert_eq!(
+            ev.end,
+            "2026-08-03T09:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
     }
 
     #[test]
