@@ -18,9 +18,11 @@
 //! external `rrule` crate.
 
 use calcard::{
-    common::{timezone::Tz, DateTimeResult},
-    icalendar::{ICalendar, ICalendarComponent, ICalendarComponentType, ICalendarProperty, ICalendarValue},
     Entry, Parser,
+    common::{DateTimeResult, timezone::Tz},
+    icalendar::{
+        ICalendar, ICalendarComponent, ICalendarComponentType, ICalendarProperty, ICalendarValue,
+    },
 };
 use chrono::{DateTime, TimeZone, Utc};
 use std::str::FromStr;
@@ -60,7 +62,9 @@ pub fn parse_todo(ics: &str) -> Result<Todo> {
 /// wrapping) - see module-level tests for the accepted round-trip guarantee.
 pub fn build_event(ev: &Event) -> String {
     let mut out = String::new();
-    out.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mcp-caldav-fastmail//EN\r\nBEGIN:VEVENT\r\n");
+    out.push_str(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mcp-caldav-fastmail//EN\r\nBEGIN:VEVENT\r\n",
+    );
     write_text_line(&mut out, "UID", &ev.uid);
     write_text_line(&mut out, "SUMMARY", &ev.summary);
     write_datetime_line(&mut out, "DTSTART", ev.start);
@@ -89,7 +93,9 @@ pub fn build_event(ev: &Event) -> String {
 /// wrapping) - see module-level tests for the accepted round-trip guarantee.
 pub fn build_todo(td: &Todo) -> String {
     let mut out = String::new();
-    out.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mcp-caldav-fastmail//EN\r\nBEGIN:VTODO\r\n");
+    out.push_str(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mcp-caldav-fastmail//EN\r\nBEGIN:VTODO\r\n",
+    );
     write_text_line(&mut out, "UID", &td.uid);
     write_text_line(&mut out, "SUMMARY", &td.summary);
     if let Some(due) = td.due {
@@ -182,7 +188,9 @@ fn parse_top_level(ics: &str) -> Result<ICalendar> {
     let mut parser = Parser::new(ics);
     match parser.entry() {
         Entry::ICalendar(ical) => Ok(ical),
-        other => Err(Error::ICal(format!("expected a VCALENDAR document, got {other:?}"))),
+        other => Err(Error::ICal(format!(
+            "expected a VCALENDAR document, got {other:?}"
+        ))),
     }
 }
 

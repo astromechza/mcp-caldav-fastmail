@@ -6,7 +6,7 @@ use mcp_caldav_fastmail::caldav::FastmailCalDav;
 use mcp_caldav_fastmail::config::Config;
 use mcp_caldav_fastmail::mcp::CalendarServer;
 
-use axum::{middleware, routing::get, Router};
+use axum::{Router, middleware, routing::get};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, tower::StreamableHttpService,
 };
@@ -54,14 +54,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // /.well-known/* MUST be public (no auth middleware); /mcp is protected by
     // require_auth. Do NOT layer require_auth over the PRM route.
-    let protected = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(
-            auth_state.clone(),
-            require_auth,
-        ));
-    let public =
-        Router::new().route("/.well-known/oauth-protected-resource", get(prm_handler));
+    let protected =
+        Router::new()
+            .nest_service("/mcp", mcp_service)
+            .layer(middleware::from_fn_with_state(
+                auth_state.clone(),
+                require_auth,
+            ));
+    let public = Router::new().route("/.well-known/oauth-protected-resource", get(prm_handler));
     let app = public.merge(protected).with_state(auth_state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;

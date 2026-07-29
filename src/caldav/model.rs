@@ -120,8 +120,12 @@ mod tests {
             href: Some("/cal/evt-1.ics".into()),
             etag: Some("\"e1\"".into()),
             summary: "Standup".into(),
-            start: DateTime::parse_from_rfc3339("2026-08-03T09:00:00Z").unwrap().with_timezone(&Utc),
-            end: DateTime::parse_from_rfc3339("2026-08-03T09:15:00Z").unwrap().with_timezone(&Utc),
+            start: DateTime::parse_from_rfc3339("2026-08-03T09:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            end: DateTime::parse_from_rfc3339("2026-08-03T09:15:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
             location: Some("Room 1".into()),
             description: Some("Daily sync".into()),
             rrule: Some("FREQ=DAILY".into()),
@@ -135,7 +139,11 @@ mod tests {
             href: Some("/cal/todo-1.ics".into()),
             etag: Some("\"t1\"".into()),
             summary: "Buy milk".into(),
-            due: Some(DateTime::parse_from_rfc3339("2026-08-03T09:00:00Z").unwrap().with_timezone(&Utc)),
+            due: Some(
+                DateTime::parse_from_rfc3339("2026-08-03T09:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
             status: Some("NEEDS-ACTION".into()),
             description: Some("2%".into()),
             priority: Some(5),

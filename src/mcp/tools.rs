@@ -125,8 +125,9 @@ pub struct UpdateTaskReq {
 
 /// Serialize `v` as pretty JSON text and wrap it as a successful tool result.
 fn ok_json<T: serde::Serialize>(v: &T) -> Result<CallToolResult, McpError> {
-    let text = serde_json::to_string_pretty(v)
-        .map_err(|e| McpError::internal_error(format!("failed to serialize tool result: {e}"), None))?;
+    let text = serde_json::to_string_pretty(v).map_err(|e| {
+        McpError::internal_error(format!("failed to serialize tool result: {e}"), None)
+    })?;
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
@@ -163,7 +164,10 @@ impl CalendarServer {
     }
 
     #[tool(description = "List events in a calendar within a time window.")]
-    async fn list_events(&self, Parameters(req): Parameters<ListEventsReq>) -> Result<CallToolResult, McpError> {
+    async fn list_events(
+        &self,
+        Parameters(req): Parameters<ListEventsReq>,
+    ) -> Result<CallToolResult, McpError> {
         let events = self
             .client
             .list_events(&req.calendar, req.start, req.end)
@@ -173,13 +177,23 @@ impl CalendarServer {
     }
 
     #[tool(description = "Get a single event by UID.")]
-    async fn get_event(&self, Parameters(req): Parameters<GetByUidReq>) -> Result<CallToolResult, McpError> {
-        let event = self.client.get_event(&req.calendar, &req.uid).await.map_err(map_err)?;
+    async fn get_event(
+        &self,
+        Parameters(req): Parameters<GetByUidReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let event = self
+            .client
+            .get_event(&req.calendar, &req.uid)
+            .await
+            .map_err(map_err)?;
         ok_json(&event)
     }
 
     #[tool(description = "Create a new event.")]
-    async fn create_event(&self, Parameters(req): Parameters<CreateEventReq>) -> Result<CallToolResult, McpError> {
+    async fn create_event(
+        &self,
+        Parameters(req): Parameters<CreateEventReq>,
+    ) -> Result<CallToolResult, McpError> {
         let event = Event {
             uid: new_uid(),
             href: None,
@@ -192,12 +206,20 @@ impl CalendarServer {
             rrule: req.rrule,
             is_instance: false,
         };
-        self.client.put_event(&req.calendar, &event).await.map_err(map_err)?;
+        self.client
+            .put_event(&req.calendar, &event)
+            .await
+            .map_err(map_err)?;
         ok_json(&event)
     }
 
-    #[tool(description = "Update an existing event. This always edits the whole series, never a single instance.")]
-    async fn update_event(&self, Parameters(req): Parameters<UpdateEventReq>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Update an existing event. This always edits the whole series, never a single instance."
+    )]
+    async fn update_event(
+        &self,
+        Parameters(req): Parameters<UpdateEventReq>,
+    ) -> Result<CallToolResult, McpError> {
         let patch = EventPatch {
             summary: req.summary,
             start: req.start,
@@ -206,33 +228,63 @@ impl CalendarServer {
             description: req.description,
             rrule: req.rrule,
         };
-        let mut event = self.client.get_event(&req.calendar, &req.uid).await.map_err(map_err)?;
+        let mut event = self
+            .client
+            .get_event(&req.calendar, &req.uid)
+            .await
+            .map_err(map_err)?;
         event.apply_patch(patch);
         event.is_instance = false;
-        self.client.put_event(&req.calendar, &event).await.map_err(map_err)?;
+        self.client
+            .put_event(&req.calendar, &event)
+            .await
+            .map_err(map_err)?;
         ok_json(&event)
     }
 
     #[tool(description = "Delete an event by UID.")]
-    async fn delete_event(&self, Parameters(req): Parameters<GetByUidReq>) -> Result<CallToolResult, McpError> {
-        self.client.delete_event(&req.calendar, &req.uid).await.map_err(map_err)?;
+    async fn delete_event(
+        &self,
+        Parameters(req): Parameters<GetByUidReq>,
+    ) -> Result<CallToolResult, McpError> {
+        self.client
+            .delete_event(&req.calendar, &req.uid)
+            .await
+            .map_err(map_err)?;
         ok_json(&serde_json::json!({ "deleted": req.uid }))
     }
 
     #[tool(description = "List tasks (VTODOs) in a calendar.")]
-    async fn list_tasks(&self, Parameters(req): Parameters<CalendarRef>) -> Result<CallToolResult, McpError> {
-        let todos = self.client.list_todos(&req.calendar).await.map_err(map_err)?;
+    async fn list_tasks(
+        &self,
+        Parameters(req): Parameters<CalendarRef>,
+    ) -> Result<CallToolResult, McpError> {
+        let todos = self
+            .client
+            .list_todos(&req.calendar)
+            .await
+            .map_err(map_err)?;
         ok_json(&todos)
     }
 
     #[tool(description = "Get a single task (VTODO) by UID.")]
-    async fn get_task(&self, Parameters(req): Parameters<GetByUidReq>) -> Result<CallToolResult, McpError> {
-        let todo = self.client.get_todo(&req.calendar, &req.uid).await.map_err(map_err)?;
+    async fn get_task(
+        &self,
+        Parameters(req): Parameters<GetByUidReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let todo = self
+            .client
+            .get_todo(&req.calendar, &req.uid)
+            .await
+            .map_err(map_err)?;
         ok_json(&todo)
     }
 
     #[tool(description = "Create a new task.")]
-    async fn create_task(&self, Parameters(req): Parameters<CreateTaskReq>) -> Result<CallToolResult, McpError> {
+    async fn create_task(
+        &self,
+        Parameters(req): Parameters<CreateTaskReq>,
+    ) -> Result<CallToolResult, McpError> {
         let todo = Todo {
             uid: new_uid(),
             href: None,
@@ -243,12 +295,18 @@ impl CalendarServer {
             description: req.description,
             priority: req.priority,
         };
-        self.client.put_todo(&req.calendar, &todo).await.map_err(map_err)?;
+        self.client
+            .put_todo(&req.calendar, &todo)
+            .await
+            .map_err(map_err)?;
         ok_json(&todo)
     }
 
     #[tool(description = "Update an existing task.")]
-    async fn update_task(&self, Parameters(req): Parameters<UpdateTaskReq>) -> Result<CallToolResult, McpError> {
+    async fn update_task(
+        &self,
+        Parameters(req): Parameters<UpdateTaskReq>,
+    ) -> Result<CallToolResult, McpError> {
         let patch = TodoPatch {
             summary: req.summary,
             due: req.due,
@@ -256,15 +314,28 @@ impl CalendarServer {
             description: req.description,
             priority: req.priority,
         };
-        let mut todo = self.client.get_todo(&req.calendar, &req.uid).await.map_err(map_err)?;
+        let mut todo = self
+            .client
+            .get_todo(&req.calendar, &req.uid)
+            .await
+            .map_err(map_err)?;
         todo.apply_patch(patch);
-        self.client.put_todo(&req.calendar, &todo).await.map_err(map_err)?;
+        self.client
+            .put_todo(&req.calendar, &todo)
+            .await
+            .map_err(map_err)?;
         ok_json(&todo)
     }
 
     #[tool(description = "Delete a task by UID.")]
-    async fn delete_task(&self, Parameters(req): Parameters<GetByUidReq>) -> Result<CallToolResult, McpError> {
-        self.client.delete_todo(&req.calendar, &req.uid).await.map_err(map_err)?;
+    async fn delete_task(
+        &self,
+        Parameters(req): Parameters<GetByUidReq>,
+    ) -> Result<CallToolResult, McpError> {
+        self.client
+            .delete_todo(&req.calendar, &req.uid)
+            .await
+            .map_err(map_err)?;
         ok_json(&serde_json::json!({ "deleted": req.uid }))
     }
 }
@@ -305,7 +376,12 @@ mod tests {
             }])
         }
 
-        async fn list_events(&self, _cal_href: &str, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Event>> {
+        async fn list_events(
+            &self,
+            _cal_href: &str,
+            _start: DateTime<Utc>,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<Event>> {
             Ok(vec![])
         }
 
@@ -376,7 +452,10 @@ mod tests {
         let server = CalendarServer::new(Arc::new(MockClient));
         let result = server.list_calendars().await.unwrap();
         let text = result_text(&result);
-        assert!(text.contains("Work"), "expected calendar name in result, got: {text}");
+        assert!(
+            text.contains("Work"),
+            "expected calendar name in result, got: {text}"
+        );
     }
 
     #[tokio::test]
@@ -394,9 +473,15 @@ mod tests {
         };
         let result = server.update_event(Parameters(req)).await.unwrap();
         let text = result_text(&result);
-        assert!(text.contains("New"), "expected patched summary in result, got: {text}");
+        assert!(
+            text.contains("New"),
+            "expected patched summary in result, got: {text}"
+        );
         // The original summary from MockClient::get_event must be gone - proves the
         // patch replaced it rather than the mock's canned value leaking through.
-        assert!(!text.contains("Original summary"), "unpatched summary leaked through: {text}");
+        assert!(
+            !text.contains("Original summary"),
+            "unpatched summary leaked through: {text}"
+        );
     }
 }

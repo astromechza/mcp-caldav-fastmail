@@ -3,7 +3,7 @@
 //! Validates signature (via JWKS), issuer, audience, expiry, and a required scope.
 
 use crate::error::{Error, Result};
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -139,7 +139,7 @@ impl KeySource for JwksKeySource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::{EncodingKey, Header, encode};
 
     const PRIV: &str = include_str!("testdata/test_priv.pem");
     const PUB: &str = include_str!("testdata/test_pub.pem");

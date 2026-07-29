@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use url::Url;
 
 use crate::caldav::model::{Calendar, Event, Todo};
@@ -16,7 +16,12 @@ use crate::ical;
 #[async_trait]
 pub trait CalDavClient: Send + Sync {
     async fn list_calendars(&self) -> Result<Vec<Calendar>>;
-    async fn list_events(&self, cal_href: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Event>>;
+    async fn list_events(
+        &self,
+        cal_href: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<Event>>;
     async fn get_event(&self, cal_href: &str, uid: &str) -> Result<Event>;
     async fn put_event(&self, cal_href: &str, ev: &Event) -> Result<()>;
     async fn delete_event(&self, cal_href: &str, uid: &str) -> Result<()>;
@@ -125,8 +130,10 @@ impl FastmailCalDav {
                 Some(XML_CONTENT_TYPE),
             )
             .await?;
-        let principal = xml::nested_href(&principal_body, "current-user-principal")?
-            .ok_or_else(|| Error::NotFound("current-user-principal not found in discovery response".into()))?;
+        let principal =
+            xml::nested_href(&principal_body, "current-user-principal")?.ok_or_else(|| {
+                Error::NotFound("current-user-principal not found in discovery response".into())
+            })?;
 
         let (_, _, home_body) = self
             .dav(
@@ -138,8 +145,9 @@ impl FastmailCalDav {
                 Some(XML_CONTENT_TYPE),
             )
             .await?;
-        let home = xml::nested_href(&home_body, "calendar-home-set")?
-            .ok_or_else(|| Error::NotFound("calendar-home-set not found in discovery response".into()))?;
+        let home = xml::nested_href(&home_body, "calendar-home-set")?.ok_or_else(|| {
+            Error::NotFound("calendar-home-set not found in discovery response".into())
+        })?;
 
         Ok(home)
     }
@@ -201,12 +209,24 @@ impl CalDavClient for FastmailCalDav {
         Ok(calendars)
     }
 
-    async fn list_events(&self, cal_href: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Event>> {
+    async fn list_events(
+        &self,
+        cal_href: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<Event>> {
         let start_fmt = start.format("%Y%m%dT%H%M%SZ").to_string();
         let end_fmt = end.format("%Y%m%dT%H%M%SZ").to_string();
         let body = xml::calendar_query_body("VEVENT", Some((&start_fmt, &end_fmt)));
         let (_, _, resp_body) = self
-            .dav("REPORT", cal_href, Some("1"), Some(body), None, Some(XML_CONTENT_TYPE))
+            .dav(
+                "REPORT",
+                cal_href,
+                Some("1"),
+                Some(body),
+                None,
+                Some(XML_CONTENT_TYPE),
+            )
             .await?;
 
         let responses = xml::parse_multistatus(&resp_body)?;
@@ -231,12 +251,18 @@ impl CalDavClient for FastmailCalDav {
         let (_, headers, body) = self.dav("GET", &href, None, None, None, None).await?;
         let mut ev = ical::parse_event(&body)?;
         ev.href = Some(href);
-        ev.etag = headers.get("ETag").and_then(|v| v.to_str().ok()).map(str::to_string);
+        ev.etag = headers
+            .get("ETag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         Ok(ev)
     }
 
     async fn put_event(&self, cal_href: &str, ev: &Event) -> Result<()> {
-        let href = ev.href.clone().unwrap_or_else(|| Self::object_href(cal_href, &ev.uid));
+        let href = ev
+            .href
+            .clone()
+            .unwrap_or_else(|| Self::object_href(cal_href, &ev.uid));
         let body = ical::build_event(ev);
         self.dav(
             "PUT",
@@ -259,7 +285,14 @@ impl CalDavClient for FastmailCalDav {
     async fn list_todos(&self, cal_href: &str) -> Result<Vec<Todo>> {
         let body = xml::calendar_query_body("VTODO", None);
         let (_, _, resp_body) = self
-            .dav("REPORT", cal_href, Some("1"), Some(body), None, Some(XML_CONTENT_TYPE))
+            .dav(
+                "REPORT",
+                cal_href,
+                Some("1"),
+                Some(body),
+                None,
+                Some(XML_CONTENT_TYPE),
+            )
             .await?;
 
         let responses = xml::parse_multistatus(&resp_body)?;
@@ -281,12 +314,18 @@ impl CalDavClient for FastmailCalDav {
         let (_, headers, body) = self.dav("GET", &href, None, None, None, None).await?;
         let mut td = ical::parse_todo(&body)?;
         td.href = Some(href);
-        td.etag = headers.get("ETag").and_then(|v| v.to_str().ok()).map(str::to_string);
+        td.etag = headers
+            .get("ETag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         Ok(td)
     }
 
     async fn put_todo(&self, cal_href: &str, td: &Todo) -> Result<()> {
-        let href = td.href.clone().unwrap_or_else(|| Self::object_href(cal_href, &td.uid));
+        let href = td
+            .href
+            .clone()
+            .unwrap_or_else(|| Self::object_href(cal_href, &td.uid));
         let body = ical::build_todo(td);
         self.dav(
             "PUT",
@@ -315,7 +354,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> FastmailCalDav {
-        FastmailCalDav::new(&server.uri(), "anth@benmeier.fastmail.com", "app-password").expect("client")
+        FastmailCalDav::new(&server.uri(), "anth@benmeier.fastmail.com", "app-password")
+            .expect("client")
     }
 
     #[tokio::test]
@@ -391,7 +431,11 @@ mod tests {
         let client = client_for(&server);
         let calendars = client.list_calendars().await.expect("list_calendars");
 
-        assert_eq!(calendars.len(), 2, "home collection itself must be skipped: {calendars:?}");
+        assert_eq!(
+            calendars.len(),
+            2,
+            "home collection itself must be skipped: {calendars:?}"
+        );
         assert_eq!(calendars[0].display_name, "Work");
         assert_eq!(calendars[0].href, "/dav/calendars/user/me/work/");
         assert_eq!(calendars[0].ctag.as_deref(), Some("ctag-1"));
@@ -430,7 +474,10 @@ END:VCALENDAR</C:calendar-data>
         let client = client_for(&server);
         let start = Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap();
         let end = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
-        let events = client.list_events("/cal/", start, end).await.expect("list_events");
+        let events = client
+            .list_events("/cal/", start, end)
+            .await
+            .expect("list_events");
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].summary, "Standup");
@@ -479,7 +526,11 @@ END:VCALENDAR</C:calendar-data>
 SUMMARY:Lunch\r\nDTSTART:20260803T120000Z\r\nDTEND:20260803T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         Mock::given(method("GET"))
             .and(path("/cal/evt-9.ics"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(ics).insert_header("ETag", "\"e9\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(ics)
+                    .insert_header("ETag", "\"e9\""),
+            )
             .mount(&server)
             .await;
 
@@ -502,7 +553,10 @@ SUMMARY:Lunch\r\nDTSTART:20260803T120000Z\r\nDTEND:20260803T130000Z\r\nEND:VEVEN
             .await;
 
         let client = client_for(&server);
-        client.delete_event("/cal/", "evt-1").await.expect("delete_event");
+        client
+            .delete_event("/cal/", "evt-1")
+            .await
+            .expect("delete_event");
     }
 
     #[tokio::test]
@@ -548,7 +602,11 @@ END:VCALENDAR</C:calendar-data>
 SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
         Mock::given(method("GET"))
             .and(path("/cal/todo-9.ics"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(ics).insert_header("ETag", "\"t9\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(ics)
+                    .insert_header("ETag", "\"t9\""),
+            )
             .mount(&server)
             .await;
 
@@ -602,7 +660,10 @@ SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
             .await;
 
         let client = client_for(&server);
-        client.delete_todo("/cal/", "todo-1").await.expect("delete_todo");
+        client
+            .delete_todo("/cal/", "todo-1")
+            .await
+            .expect("delete_todo");
     }
 
     #[tokio::test]
@@ -616,9 +677,17 @@ SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
             .await;
 
         let client = client_for(&server);
-        let err = client.get_event("/cal/", "missing").await.expect_err("expected error");
+        let err = client
+            .get_event("/cal/", "missing")
+            .await
+            .expect_err("expected error");
         match err {
-            Error::CalDav { status, method, href, body } => {
+            Error::CalDav {
+                status,
+                method,
+                href,
+                body,
+            } => {
                 assert_eq!(status, 404);
                 assert_eq!(method, "GET");
                 assert_eq!(href, "/cal/missing.ics");
@@ -651,9 +720,17 @@ SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
             rrule: None,
             is_instance: false,
         };
-        let err = client.put_event("/cal/", &ev).await.expect_err("expected error");
+        let err = client
+            .put_event("/cal/", &ev)
+            .await
+            .expect_err("expected error");
         match err {
-            Error::CalDav { status, method, href, body } => {
+            Error::CalDav {
+                status,
+                method,
+                href,
+                body,
+            } => {
                 assert_eq!(status, 500);
                 assert_eq!(method, "PUT");
                 assert_eq!(href, "/cal/evt-1.ics");
@@ -683,12 +760,21 @@ SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
 
         let client = client_for(&server);
         let err = client.list_calendars().await.expect_err("expected error");
-        assert!(matches!(err, Error::NotFound(_)), "expected Error::NotFound, got {err:?}");
+        assert!(
+            matches!(err, Error::NotFound(_)),
+            "expected Error::NotFound, got {err:?}"
+        );
     }
 
     #[test]
     fn object_href_joins_collection_and_uid_exactly_once() {
-        assert_eq!(FastmailCalDav::object_href("/cal/", "evt-1"), "/cal/evt-1.ics");
-        assert_eq!(FastmailCalDav::object_href("/cal", "evt-1"), "/cal/evt-1.ics");
+        assert_eq!(
+            FastmailCalDav::object_href("/cal/", "evt-1"),
+            "/cal/evt-1.ics"
+        );
+        assert_eq!(
+            FastmailCalDav::object_href("/cal", "evt-1"),
+            "/cal/evt-1.ics"
+        );
     }
 }

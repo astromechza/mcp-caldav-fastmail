@@ -56,8 +56,8 @@ mod tests {
 use crate::auth::validator::JwtValidator;
 use axum::{
     extract::{Request, State},
-    http::header::WWW_AUTHENTICATE,
     http::StatusCode,
+    http::header::WWW_AUTHENTICATE,
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
@@ -112,9 +112,9 @@ mod middleware_tests {
     use super::*;
     use crate::auth::validator::KeySource;
     use crate::error::Result;
+    use axum::Router;
     use axum::body::Body;
     use axum::routing::get;
-    use axum::Router;
     use jsonwebtoken::DecodingKey;
     use tower::ServiceExt;
 

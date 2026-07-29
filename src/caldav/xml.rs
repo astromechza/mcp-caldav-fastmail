@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
-use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
+use quick_xml::events::Event as XmlEvent;
 use std::collections::HashMap;
 
 /// One <response> element: an href plus a flat map of local-name -> text.
@@ -47,7 +47,10 @@ pub fn parse_multistatus(xml: &str) -> Result<Vec<DavResponse>> {
             }
             Ok(XmlEvent::Text(t)) => {
                 if let (Some(resp), Some(prop)) = (cur.as_mut(), cur_prop.as_ref()) {
-                    let text = t.unescape().map_err(|e| Error::Xml(e.to_string()))?.to_string();
+                    let text = t
+                        .unescape()
+                        .map_err(|e| Error::Xml(e.to_string()))?
+                        .to_string();
                     if prop == "href" && resp.href.is_empty() {
                         resp.href = text;
                     } else {
@@ -112,7 +115,10 @@ pub fn nested_href(xml: &str, container_local_name: &str) -> Result<Option<Strin
                 }
             }
             Ok(XmlEvent::Text(t)) if depth > 0 && in_href => {
-                let text = t.unescape().map_err(|e| Error::Xml(e.to_string()))?.to_string();
+                let text = t
+                    .unescape()
+                    .map_err(|e| Error::Xml(e.to_string()))?
+                    .to_string();
                 return Ok(Some(text));
             }
             Ok(XmlEvent::End(e)) => {
