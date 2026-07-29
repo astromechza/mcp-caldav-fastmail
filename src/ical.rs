@@ -272,9 +272,20 @@ fn date_time_result_to_utc(result: &DateTimeResult, tz_id: Option<&str>) -> Opti
         // treat the naive local time as if it were already UTC.
         return Some(Utc.from_utc_datetime(&result.date_time));
     }
+    // Resolve local->UTC handling DST edge cases:
+    // - Ambiguous (fall-back overlap): `.earliest()` picks the earlier instant.
+    // - Nonexistent (spring-forward gap): `.earliest()` yields None, so shift one
+    //   hour forward to land just past the gap and retry.
+    // - Last resort: treat the naive time as UTC (matches the floating fallback)
+    //   rather than dropping the event as "missing DTSTART/DTEND".
     tz.from_local_datetime(&result.date_time)
-        .single()
+        .earliest()
+        .or_else(|| {
+            tz.from_local_datetime(&(result.date_time + chrono::Duration::hours(1)))
+                .earliest()
+        })
         .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| Some(Utc.from_utc_datetime(&result.date_time)))
 }
 
 fn event_from_component(comp: &ICalendarComponent) -> Result<Event> {
@@ -398,6 +409,24 @@ END:VCALENDAR\r\n";
         assert_eq!(
             ev.end,
             "2026-08-03T09:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_event_handles_dst_ambiguous_local_time() {
+        // 2026-10-25 clocks in Europe/London go back at 02:00 -> 01:00, so
+        // 01:30 local occurs twice (ambiguous). Previously `.single()` returned
+        // None and the event was dropped as "missing DTSTART". We now pick the
+        // earlier instant: 01:30 BST (UTC+1) = 00:30Z.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-dst\r\nSUMMARY:Ambiguous\r\n\
+DTSTART;TZID=Europe/London:20261025T013000\r\n\
+DTEND;TZID=Europe/London:20261025T014500\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("ambiguous local time must not be dropped");
+        assert_eq!(
+            ev.start,
+            "2026-10-25T00:30:00Z".parse::<DateTime<Utc>>().unwrap()
         );
     }
 

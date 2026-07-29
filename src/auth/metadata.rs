@@ -51,6 +51,19 @@ mod tests {
         let h = www_authenticate("https://mcp.example.com/.well-known/oauth-protected-resource");
         assert!(h.starts_with("Bearer resource_metadata="));
     }
+
+    #[test]
+    fn parse_bearer_is_case_insensitive() {
+        // RFC 6750: the auth scheme is case-insensitive.
+        assert_eq!(parse_bearer("Bearer abc123"), Some("abc123"));
+        assert_eq!(parse_bearer("bearer abc123"), Some("abc123"));
+        assert_eq!(parse_bearer("BEARER abc123"), Some("abc123"));
+        assert_eq!(parse_bearer("bEaReR   abc123  "), Some("abc123"));
+        // Wrong scheme or empty token -> None.
+        assert_eq!(parse_bearer("Basic abc123"), None);
+        assert_eq!(parse_bearer("Bearer "), None);
+        assert_eq!(parse_bearer("abc123"), None);
+    }
 }
 
 use crate::auth::validator::JwtValidator;
@@ -81,13 +94,24 @@ pub async fn prm_handler(State(st): State<AuthState>) -> Json<ProtectedResourceM
     ))
 }
 
+/// Extract a bearer token from an `Authorization` header value. Per RFC 6750
+/// the `Bearer` auth scheme is case-insensitive (`bearer`, `BEARER`, ... all
+/// valid), so match it that way rather than a case-sensitive prefix.
+fn parse_bearer(header: &str) -> Option<&str> {
+    let (scheme, rest) = header.split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| rest.trim())
+        .filter(|t| !t.is_empty())
+}
+
 /// Middleware: require a valid bearer token, else 401 with challenge.
 pub async fn require_auth(State(st): State<AuthState>, req: Request, next: Next) -> Response {
     let token = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
+        .and_then(parse_bearer)
         .map(|s| s.to_string());
 
     match token {

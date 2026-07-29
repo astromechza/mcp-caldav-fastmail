@@ -60,9 +60,25 @@ impl FastmailCalDav {
     }
 
     fn resolve(&self, href: &str) -> Result<Url> {
-        self.base
+        let url = self
+            .base
             .join(href)
-            .map_err(|e| Error::Config(format!("invalid href {href:?}: {e}")))
+            .map_err(|e| Error::Config(format!("invalid href {href:?}: {e}")))?;
+        // SSRF guard: `Url::join` treats an absolute URL or a scheme-relative
+        // `//host/...` href as an override, which could redirect a request
+        // (carrying the Fastmail Basic-auth credentials) to an attacker-chosen
+        // origin. hrefs come from tool inputs (calendar/uid) and server
+        // responses, so pin every resolved URL to the configured base origin.
+        if url.origin() != self.base.origin() {
+            return Err(Error::CalDav {
+                status: 0,
+                method: "RESOLVE".into(),
+                href: href.to_string(),
+                body: "refusing href that resolves to a different origin than the CalDAV base"
+                    .into(),
+            });
+        }
+        Ok(url)
     }
 
     /// Send a CalDAV/WebDAV request and return `(status, headers, body)`. Maps 4xx/5xx
@@ -357,6 +373,20 @@ mod tests {
     fn client_for(server: &MockServer) -> FastmailCalDav {
         FastmailCalDav::new(&server.uri(), "anth@benmeier.fastmail.com", "app-password")
             .expect("client")
+    }
+
+    #[test]
+    fn resolve_pins_to_base_origin() {
+        let c = FastmailCalDav::new("https://caldav.fastmail.com/", "u", "p").unwrap();
+        // Same-origin path-absolute and relative hrefs resolve fine.
+        assert!(c.resolve("/dav/calendars/user/x/evt.ics").is_ok());
+        assert!(c.resolve("dav/x.ics").is_ok());
+        // Same-origin absolute URL (as a server might echo) is allowed.
+        assert!(c.resolve("https://caldav.fastmail.com/dav/x.ics").is_ok());
+        // SSRF vectors must be rejected: absolute off-origin + scheme-relative host.
+        assert!(c.resolve("https://evil.example/steal").is_err());
+        assert!(c.resolve("//evil.example/steal").is_err());
+        assert!(c.resolve("http://caldav.fastmail.com/x").is_err()); // scheme change
     }
 
     #[tokio::test]
