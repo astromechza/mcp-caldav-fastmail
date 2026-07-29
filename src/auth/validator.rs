@@ -28,14 +28,6 @@ pub enum Aud {
     Many(Vec<String>),
 }
 
-impl Aud {
-    pub fn contains(&self, v: &str) -> bool {
-        match self {
-            Aud::One(s) => s == v,
-            Aud::Many(xs) => xs.iter().any(|s| s == v),
-        }
-    }
-}
 
 /// Fetches JWKS keys keyed by `kid`. Injectable so the validator is testable without a live Authelia.
 #[async_trait::async_trait]

@@ -151,6 +151,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jwt_static_pem_wrong_issuer_fails() {
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+        let priv_pem = include_str!("testdata/test_priv.pem");
+        let mut h = Header::new(Algorithm::RS256);
+        h.kid = Some("test".into());
+        let claims = serde_json::json!({"sub":"u","iss":"https://issuer.x","exp":9_999_999_999u64});
+        let token = encode(
+            &h,
+            &claims,
+            &EncodingKey::from_rsa_pem(priv_pem.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let cfg = AuthConfig::Jwt {
+            resource: "https://mcp.x".into(),
+            source: JwtKeySource::PublicKeyPem("src/auth/testdata/test_pub.pem".into()),
+            issuer: Some("https://different-issuer.x".into()),
+            audience: None,
+            required_scope: None,
+        };
+        let a = Authenticator::from_config(&cfg).await.unwrap().unwrap();
+        assert!(!a.verify(&token).await, "mismatched issuer must fail");
+    }
+
+    #[tokio::test]
     async fn jwt_static_pem_optional_aud_skipped() {
         use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
         let priv_pem = include_str!("testdata/test_priv.pem");
