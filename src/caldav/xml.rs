@@ -58,6 +58,19 @@ pub fn parse_multistatus(xml: &str) -> Result<Vec<DavResponse>> {
                     }
                 }
             }
+            // CDATA sections carry literal text (no entity unescaping). Fastmail
+            // wraps property values like <displayname> in CDATA, so this arm is
+            // needed or those props read as absent.
+            Ok(XmlEvent::CData(t)) => {
+                if let (Some(resp), Some(prop)) = (cur.as_mut(), cur_prop.as_ref()) {
+                    let text = String::from_utf8_lossy(&t.into_inner()).into_owned();
+                    if prop == "href" && resp.href.is_empty() {
+                        resp.href = text;
+                    } else {
+                        resp.props.insert(prop.clone(), text);
+                    }
+                }
+            }
             Ok(XmlEvent::End(e)) => {
                 let name = local(e.name().as_ref());
                 if name == "response"

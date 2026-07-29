@@ -138,12 +138,15 @@ impl FastmailCalDav {
     }
 
     /// Resolve the calendar-home-set href via the discovery chain:
-    /// "/" -> current-user-principal -> calendar-home-set.
+    /// "/dav/" -> current-user-principal -> calendar-home-set.
+    ///
+    /// Fastmail's CalDAV context lives under `/dav/` (a PROPFIND on `/` returns
+    /// nginx 404; `/.well-known/caldav` 301-redirects to `/dav/calendars`).
     async fn calendar_home(&self) -> Result<String> {
         let (_, _, principal_body) = self
             .dav(
                 "PROPFIND",
-                "/",
+                "/dav/",
                 Some("0"),
                 Some(xml::propfind_principal_body().to_string()),
                 None,
@@ -396,7 +399,7 @@ mod tests {
     async fn list_calendars_walks_full_discovery_chain() {
         let server = MockServer::start().await;
 
-        // Step 1: PROPFIND "/" -> current-user-principal (nested href).
+        // Step 1: PROPFIND "/dav/" -> current-user-principal (nested href).
         let principal_body = r#"<?xml version="1.0"?>
 <multistatus xmlns="DAV:">
   <response>
@@ -409,7 +412,7 @@ mod tests {
   </response>
 </multistatus>"#;
         Mock::given(method("PROPFIND"))
-            .and(path("/"))
+            .and(path("/dav/"))
             .respond_with(ResponseTemplate::new(207).set_body_string(principal_body))
             .mount(&server)
             .await;
@@ -787,7 +790,7 @@ SUMMARY:Buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
   </response>
 </multistatus>"#;
         Mock::given(method("PROPFIND"))
-            .and(path("/"))
+            .and(path("/dav/"))
             .respond_with(ResponseTemplate::new(207).set_body_string(empty_body))
             .mount(&server)
             .await;

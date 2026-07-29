@@ -293,8 +293,12 @@ fn event_from_component(comp: &ICalendarComponent) -> Result<Event> {
         .ok_or_else(|| Error::ICal("VEVENT missing UID".into()))?;
     let start = datetime_prop(comp, ICalendarProperty::Dtstart)
         .ok_or_else(|| Error::ICal("VEVENT missing DTSTART".into()))?;
-    let end = datetime_prop(comp, ICalendarProperty::Dtend)
-        .ok_or_else(|| Error::ICal("VEVENT missing DTEND".into()))?;
+    // DTEND is OPTIONAL per RFC5545 §3.6.1: an event may instead carry DURATION,
+    // or (for a DATE-valued DTSTART) omit both to mean an all-day event. Real
+    // Fastmail data includes such events, so don't reject them.
+    // TODO(follow-up): honor DURATION and DATE-valued all-day spans precisely;
+    // for now fall back to a zero-length event ending at DTSTART.
+    let end = datetime_prop(comp, ICalendarProperty::Dtend).unwrap_or(start);
     let summary = text_prop(comp, ICalendarProperty::Summary).unwrap_or_default();
     let location = text_prop(comp, ICalendarProperty::Location);
     let description = text_prop(comp, ICalendarProperty::Description);
