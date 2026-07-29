@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::caldav::client::CalDavClient;
-use crate::caldav::model::{Event, Todo};
+use crate::caldav::model::{Event, EventPatch, Todo, TodoPatch};
 use crate::error::Error;
 
 /// Parameters for listing events within a time window.
@@ -198,25 +198,16 @@ impl CalendarServer {
 
     #[tool(description = "Update an existing event. This always edits the whole series, never a single instance.")]
     async fn update_event(&self, Parameters(req): Parameters<UpdateEventReq>) -> Result<CallToolResult, McpError> {
+        let patch = EventPatch {
+            summary: req.summary,
+            start: req.start,
+            end: req.end,
+            location: req.location,
+            description: req.description,
+            rrule: req.rrule,
+        };
         let mut event = self.client.get_event(&req.calendar, &req.uid).await.map_err(map_err)?;
-        if let Some(summary) = req.summary {
-            event.summary = summary;
-        }
-        if let Some(start) = req.start {
-            event.start = start;
-        }
-        if let Some(end) = req.end {
-            event.end = end;
-        }
-        if let Some(location) = req.location {
-            event.location = Some(location);
-        }
-        if let Some(description) = req.description {
-            event.description = Some(description);
-        }
-        if let Some(rrule) = req.rrule {
-            event.rrule = Some(rrule);
-        }
+        event.apply_patch(patch);
         event.is_instance = false;
         self.client.put_event(&req.calendar, &event).await.map_err(map_err)?;
         ok_json(&event)
@@ -232,6 +223,12 @@ impl CalendarServer {
     async fn list_tasks(&self, Parameters(req): Parameters<CalendarRef>) -> Result<CallToolResult, McpError> {
         let todos = self.client.list_todos(&req.calendar).await.map_err(map_err)?;
         ok_json(&todos)
+    }
+
+    #[tool(description = "Get a single task (VTODO) by UID.")]
+    async fn get_task(&self, Parameters(req): Parameters<GetByUidReq>) -> Result<CallToolResult, McpError> {
+        let todo = self.client.get_todo(&req.calendar, &req.uid).await.map_err(map_err)?;
+        ok_json(&todo)
     }
 
     #[tool(description = "Create a new task.")]
@@ -252,22 +249,15 @@ impl CalendarServer {
 
     #[tool(description = "Update an existing task.")]
     async fn update_task(&self, Parameters(req): Parameters<UpdateTaskReq>) -> Result<CallToolResult, McpError> {
+        let patch = TodoPatch {
+            summary: req.summary,
+            due: req.due,
+            status: req.status,
+            description: req.description,
+            priority: req.priority,
+        };
         let mut todo = self.client.get_todo(&req.calendar, &req.uid).await.map_err(map_err)?;
-        if let Some(summary) = req.summary {
-            todo.summary = summary;
-        }
-        if let Some(due) = req.due {
-            todo.due = Some(due);
-        }
-        if let Some(status) = req.status {
-            todo.status = Some(status);
-        }
-        if let Some(description) = req.description {
-            todo.description = Some(description);
-        }
-        if let Some(priority) = req.priority {
-            todo.priority = Some(priority);
-        }
+        todo.apply_patch(patch);
         self.client.put_todo(&req.calendar, &todo).await.map_err(map_err)?;
         ok_json(&todo)
     }
