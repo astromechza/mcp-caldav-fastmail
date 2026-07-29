@@ -55,7 +55,9 @@ impl Authenticator {
             } => {
                 let keys: Arc<dyn crate::auth::validator::KeySource> = match source {
                     JwtKeySource::Jwks(uri) => Arc::new(JwksKeySource::new(uri.clone())),
-                    JwtKeySource::PublicKeyPem(p) => Arc::new(StaticKeySource::from_pem_or_path(p)?),
+                    JwtKeySource::PublicKeyPem(p) => {
+                        Arc::new(StaticKeySource::from_pem_or_path(p)?)
+                    }
                 };
                 let validator = JwtValidator::new(
                     keys,

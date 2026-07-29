@@ -225,7 +225,9 @@ mod build_router_tests {
             .unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
-            r.headers().get(axum::http::header::WWW_AUTHENTICATE).unwrap(),
+            r.headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .unwrap(),
             "Bearer"
         );
 
@@ -287,12 +289,18 @@ mod build_router_tests {
     #[tokio::test]
     async fn nested_mcp_subpaths_are_gated() {
         // nest (prefix match, like nest_service in production) exposes /mcp AND /mcp/*
-        let protected: Router<()> =
-            Router::new().nest("/mcp", Router::new().route("/session", get(|| async { "ok" })));
+        let protected: Router<()> = Router::new().nest(
+            "/mcp",
+            Router::new().route("/session", get(|| async { "ok" })),
+        );
         let app = build_router(protected, Some(state(false).await)); // token mode
         // Unauthenticated request to a SUBPATH must be rejected, not fall through.
         let r = app
-            .oneshot(HttpRequest::get("/mcp/session").body(Body::empty()).unwrap())
+            .oneshot(
+                HttpRequest::get("/mcp/session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(

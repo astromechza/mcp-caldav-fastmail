@@ -28,7 +28,6 @@ pub enum Aud {
     Many(Vec<String>),
 }
 
-
 /// Fetches JWKS keys keyed by `kid`. Injectable so the validator is testable without a live Authelia.
 #[async_trait::async_trait]
 pub trait KeySource: Send + Sync {

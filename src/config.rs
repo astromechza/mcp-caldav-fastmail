@@ -26,7 +26,13 @@ pub enum AuthConfig {
 impl std::fmt::Debug for AuthConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuthConfig::Jwt { resource, source, issuer, audience, required_scope } => f
+            AuthConfig::Jwt {
+                resource,
+                source,
+                issuer,
+                audience,
+                required_scope,
+            } => f
                 .debug_struct("Jwt")
                 .field("resource", resource)
                 .field("source", source)
@@ -141,8 +147,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn look(pairs: Vec<(&str, &str)>) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> =
-            pairs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let map: HashMap<String, String> = pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         move |k: &str| map.get(k).cloned()
     }
 
@@ -166,9 +174,18 @@ mod tests {
     fn jwt_mode_with_pem_ok() {
         let mut v = fastmail();
         v.push(("RESOURCE_URI", "https://mcp.x"));
-        v.push(("AUTH_JWT_PUBLIC_KEY", "-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----"));
+        v.push((
+            "AUTH_JWT_PUBLIC_KEY",
+            "-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----",
+        ));
         let cfg = Config::from_lookup(look(v)).unwrap();
-        assert!(matches!(cfg.auth, AuthConfig::Jwt { source: JwtKeySource::PublicKeyPem(_), .. }));
+        assert!(matches!(
+            cfg.auth,
+            AuthConfig::Jwt {
+                source: JwtKeySource::PublicKeyPem(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -196,7 +213,10 @@ mod tests {
         let mut ok = fastmail();
         ok.push(("AUTH_MODE", "token"));
         ok.push(("MCP_TOKEN", "abcdefghijklmnopqrstuvwxyz012345"));
-        assert!(matches!(Config::from_lookup(look(ok)).unwrap().auth, AuthConfig::Token { .. }));
+        assert!(matches!(
+            Config::from_lookup(look(ok)).unwrap().auth,
+            AuthConfig::Token { .. }
+        ));
 
         let mut bad = fastmail();
         bad.push(("AUTH_MODE", "token"));
@@ -207,7 +227,10 @@ mod tests {
     fn none_mode_needs_only_fastmail() {
         let mut v = fastmail();
         v.push(("AUTH_MODE", "none"));
-        assert!(matches!(Config::from_lookup(look(v)).unwrap().auth, AuthConfig::None));
+        assert!(matches!(
+            Config::from_lookup(look(v)).unwrap().auth,
+            AuthConfig::None
+        ));
     }
 
     #[test]
@@ -224,7 +247,9 @@ mod tests {
         v.push(("AUTH_JWKS_URI", "u"));
         let cfg = Config::from_lookup(look(v)).unwrap();
         match cfg.auth {
-            AuthConfig::Jwt { audience, .. } => assert_eq!(audience.as_deref(), Some("https://mcp.x")),
+            AuthConfig::Jwt { audience, .. } => {
+                assert_eq!(audience.as_deref(), Some("https://mcp.x"))
+            }
             _ => panic!("expected jwt"),
         }
     }

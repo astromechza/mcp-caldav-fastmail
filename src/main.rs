@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mcp_caldav_fastmail::auth::{Authenticator, AuthState, build_router};
+use mcp_caldav_fastmail::auth::{AuthState, Authenticator, build_router};
 use mcp_caldav_fastmail::caldav::FastmailCalDav;
 use mcp_caldav_fastmail::config::{AuthConfig, Config};
 use mcp_caldav_fastmail::mcp::CalendarServer;
@@ -80,11 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_router(protected, auth_state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
-    tracing::info!(
-        "listening on {} (auth mode: {})",
-        cfg.bind_addr,
-        mode_label
-    );
+    tracing::info!("listening on {} (auth mode: {})", cfg.bind_addr, mode_label);
     axum::serve(listener, app).await?;
     Ok(())
 }
