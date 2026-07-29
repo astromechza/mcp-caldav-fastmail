@@ -462,4 +462,19 @@ END:VCALENDAR\r\n";
         assert_eq!(insts.len(), 3);
         assert!(insts.iter().all(|e| e.is_instance));
     }
+
+    #[test]
+    fn parse_event_without_dtend_defaults_to_dtstart() {
+        // Regression test for the DTEND-optional fix (RFC5545 3.6.1 permits an
+        // event to omit DTEND entirely). Real Fastmail data includes such events;
+        // previously this fell through `datetime_prop(..., Dtend).unwrap_or(start)`
+        // only if that path existed - assert it still defaults end == start rather
+        // than erroring out.
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:evt-no-dtend\r\nSUMMARY:No End\r\n\
+DTSTART:20260803T090000Z\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = parse_event(ics).expect("VEVENT without DTEND must still parse");
+        assert_eq!(ev.end, ev.start);
+    }
 }

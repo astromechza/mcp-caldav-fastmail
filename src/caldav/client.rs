@@ -197,11 +197,11 @@ impl CalDavClient for FastmailCalDav {
             )
             .await?;
 
-        // Compare with a trailing slash trimmed on both sides rather than raw string
-        // equality: `home` came from the discovery PROPFIND response while `r.href`
-        // comes from this (separate) PROPFIND Depth:1 response, and servers aren't
-        // guaranteed to echo the exact same absolute-vs-relative/trailing-slash
-        // formatting for what is logically the same collection.
+        // `home` came from the discovery PROPFIND response while `r.href` comes from
+        // this (separate) PROPFIND Depth:1 response, so trailing-slash formatting
+        // might differ even for the logically same collection - kept as a
+        // belt-and-suspenders check alongside the resourcetype filter below, which
+        // is what actually distinguishes real calendars now.
         let home_trimmed = home.trim_end_matches('/');
         let responses = xml::parse_multistatus(&body)?;
         let mut calendars = Vec::new();
@@ -210,22 +210,33 @@ impl CalDavClient for FastmailCalDav {
                 // The home collection itself, not a calendar within it.
                 continue;
             }
+            // Only resourcetype "calendar" is a real user calendar. This excludes
+            // the home container (resourcetype "collection" only) and scheduling
+            // collections (resourcetype "collection schedule-inbox" /
+            // "collection schedule-outbox"), which otherwise look just like a
+            // calendar (they carry a displayname too).
+            let is_calendar = r
+                .prop("resourcetype")
+                .is_some_and(|rt| rt.split_whitespace().any(|tok| tok == "calendar"));
+            if !is_calendar {
+                continue;
+            }
             let Some(display_name) = r.prop("displayname") else {
-                // No displayname means this isn't a calendar collection we recognize
-                // (e.g. the flat parser tripped over something else in the listing).
                 continue;
             };
             let color = r.prop("calendar-color");
             let ctag = r.prop("getctag");
+            let components = match r.prop("supported-calendar-component-set") {
+                Some(set) if !set.trim().is_empty() => {
+                    set.split_whitespace().map(str::to_string).collect()
+                }
+                _ => vec!["VEVENT".to_string()],
+            };
             calendars.push(Calendar {
                 href: r.href,
                 display_name,
                 color,
-                // The flat multistatus parser can't read the child <comp name="VEVENT"/>
-                // elements of <supported-calendar-component-set> (the component name is
-                // an attribute, not text) - default to VEVENT-only support rather than
-                // guessing. See caldav::xml module docs for the parser's limitations.
-                components: vec!["VEVENT".to_string()],
+                components,
                 ctag,
             });
         }
@@ -435,27 +446,49 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Step 3: PROPFIND on the calendar-home -> the list of calendars.
+        // Step 3: PROPFIND on the calendar-home -> the list of calendars. This
+        // mirrors real Fastmail Depth:1 output: the home container itself
+        // (resourcetype "collection" only), a real calendar (resourcetype
+        // "collection calendar" with a component-set), and a scheduling
+        // collection (resourcetype "collection schedule-inbox") that must be
+        // skipped even though it also carries a displayname.
         let calendars_body = r#"<?xml version="1.0"?>
-<multistatus xmlns="DAV:" xmlns:CS="http://calendarserver.org/ns/">
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/">
   <response>
     <href>/dav/calendars/user/me/</href>
     <propstat><prop>
-      <displayname>me</displayname>
+      <displayname><![CDATA[me]]></displayname>
+      <resourcetype><collection/></resourcetype>
     </prop></propstat>
   </response>
   <response>
     <href>/dav/calendars/user/me/work/</href>
     <propstat><prop>
-      <displayname>Work</displayname>
+      <displayname><![CDATA[Work]]></displayname>
+      <resourcetype><collection/><C:calendar/></resourcetype>
+      <C:supported-calendar-component-set>
+        <C:comp name="VEVENT"/>
+        <C:comp name="VTODO"/>
+      </C:supported-calendar-component-set>
       <CS:getctag>ctag-1</CS:getctag>
     </prop></propstat>
   </response>
   <response>
     <href>/dav/calendars/user/me/home/</href>
     <propstat><prop>
-      <displayname>Home</displayname>
+      <displayname><![CDATA[Home]]></displayname>
+      <resourcetype><collection/><C:calendar/></resourcetype>
+      <C:supported-calendar-component-set>
+        <C:comp name="VEVENT"/>
+      </C:supported-calendar-component-set>
       <CS:getctag>ctag-2</CS:getctag>
+    </prop></propstat>
+  </response>
+  <response>
+    <href>/dav/calendars/user/me/Inbox/</href>
+    <propstat><prop>
+      <displayname><![CDATA[Inbox]]></displayname>
+      <resourcetype><collection/><C:schedule-inbox/></resourcetype>
     </prop></propstat>
   </response>
 </multistatus>"#;
@@ -471,13 +504,80 @@ mod tests {
         assert_eq!(
             calendars.len(),
             2,
-            "home collection itself must be skipped: {calendars:?}"
+            "home collection and scheduling collection must be skipped: {calendars:?}"
         );
         assert_eq!(calendars[0].display_name, "Work");
         assert_eq!(calendars[0].href, "/dav/calendars/user/me/work/");
         assert_eq!(calendars[0].ctag.as_deref(), Some("ctag-1"));
+        assert_eq!(
+            calendars[0].components,
+            vec!["VEVENT".to_string(), "VTODO".to_string()]
+        );
         assert_eq!(calendars[1].display_name, "Home");
         assert_eq!(calendars[1].href, "/dav/calendars/user/me/home/");
+        assert_eq!(calendars[1].components, vec!["VEVENT".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn list_calendars_skips_scheduling_collections() {
+        // Focused regression test for the resourcetype-based filter: a
+        // schedule-inbox/schedule-outbox collection must never be treated as a
+        // user calendar, even though it carries a displayname like real Fastmail
+        // data does.
+        let server = MockServer::start().await;
+
+        let principal_body = r#"<?xml version="1.0"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/</href>
+    <propstat><prop>
+      <current-user-principal><href>/dav/principals/user/me/</href></current-user-principal>
+    </prop></propstat>
+  </response>
+</multistatus>"#;
+        Mock::given(method("PROPFIND"))
+            .and(path("/dav/"))
+            .respond_with(ResponseTemplate::new(207).set_body_string(principal_body))
+            .mount(&server)
+            .await;
+
+        let home_body = r#"<?xml version="1.0"?>
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <response>
+    <href>/dav/principals/user/me/</href>
+    <propstat><prop>
+      <C:calendar-home-set><href>/dav/calendars/user/me/</href></C:calendar-home-set>
+    </prop></propstat>
+  </response>
+</multistatus>"#;
+        Mock::given(method("PROPFIND"))
+            .and(path("/dav/principals/user/me/"))
+            .respond_with(ResponseTemplate::new(207).set_body_string(home_body))
+            .mount(&server)
+            .await;
+
+        let calendars_body = r#"<?xml version="1.0"?>
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <response>
+    <href>/dav/calendars/user/me/Outbox/</href>
+    <propstat><prop>
+      <displayname><![CDATA[Outbox]]></displayname>
+      <resourcetype><collection/><C:schedule-outbox/></resourcetype>
+    </prop></propstat>
+  </response>
+</multistatus>"#;
+        Mock::given(method("PROPFIND"))
+            .and(path("/dav/calendars/user/me/"))
+            .respond_with(ResponseTemplate::new(207).set_body_string(calendars_body))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let calendars = client.list_calendars().await.expect("list_calendars");
+        assert!(
+            calendars.is_empty(),
+            "schedule-outbox must not be returned as a calendar: {calendars:?}"
+        );
     }
 
     #[tokio::test]
