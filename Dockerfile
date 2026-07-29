@@ -34,7 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
-RUN cargo build --release
+RUN cargo build --release --locked
+# --locked: build the exact Cargo.lock deps and fail fast if it drifts from
+# Cargo.toml, so published images are reproducible.
 # Symbol stripping via [profile.release] strip = true in Cargo.toml.
 
 FROM gcr.io/distroless/cc-debian12

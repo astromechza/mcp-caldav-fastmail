@@ -1,7 +1,9 @@
 //! Compiled-in TLS root-of-trust for outbound HTTPS clients.
 //!
-//! We intend to run this server in a `FROM scratch` container image, which has
-//! no OS certificate store (no `/etc/ssl/certs`, no `ca-certificates` package).
+//! The point is to not depend on a filesystem trust store, so outbound TLS
+//! works in minimal container images regardless of what CA files they ship
+//! (the runtime image is distroless today, but this also holds for `scratch`
+//! or any image without a populated `/etc/ssl/certs`).
 //!
 //! `reqwest` 0.13's `rustls` feature verifies server certificates with
 //! [`rustls-platform-verifier`], which -- on Linux -- loads trust roots from
@@ -14,14 +16,10 @@
 //! that feature was removed when reqwest switched its `rustls` backend over
 //! to the platform verifier.
 //!
-//! To avoid depending on any files being present in the container image, we
-//! instead compile Mozilla's root CA list into the binary via
-//! `webpki-root-certs` and pin every `reqwest::Client` we build to *only*
-//! those roots with [`reqwest::ClientBuilder::tls_certs_only`], which bypasses
+//! So we compile Mozilla's root CA list into the binary via `webpki-root-certs`
+//! and pin every `reqwest::Client` we build to *only* those roots with
+//! [`reqwest::ClientBuilder::tls_certs_only`], which bypasses
 //! `rustls-platform-verifier` (and therefore any filesystem access) entirely.
-//! See `Dockerfile` for the belt-and-suspenders CA file that's still copied
-//! into the image, in case a future dependency builds its own `reqwest`
-//! client without going through this helper.
 
 use crate::error::{Error, Result};
 
@@ -30,7 +28,7 @@ use crate::error::{Error, Result};
 ///
 /// Every outbound `reqwest::Client` built by this crate should pass this to
 /// `tls_certs_only` so that certificate verification never touches the
-/// filesystem (there isn't one, on `scratch`).
+/// filesystem trust store.
 pub fn webpki_roots() -> Result<Vec<reqwest::Certificate>> {
     webpki_root_certs::TLS_SERVER_ROOT_CERTS
         .iter()

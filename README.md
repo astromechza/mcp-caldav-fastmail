@@ -318,9 +318,12 @@ docker run -p 8080:8080 \
   -e AUTH_MODE=... \
   -e FASTMAIL_USERNAME=... \
   -e FASTMAIL_APP_PASSWORD=... \
-  # ... mode-specific vars, see Configuration above ...
   mcp-caldav-fastmail
 ```
+
+Add the mode-specific variables from the [Configuration](#configuration) table
+to the `docker run` invocation (e.g. `-e MCP_TOKEN=...` for `token` mode, or
+`-e RESOURCE_URI=... -e AUTH_JWKS_URI=...` for `jwt` mode).
 
 `token` mode example:
 
