@@ -147,9 +147,12 @@ the requested window (R1).
 **Read tasks:** REPORT `calendar-query` with `comp=VTODO`, filter by status/due.
 
 **Writes:** build ICS via calcard → `PUT` to the resource href with
-`If-Match: <etag>` for lost-update protection; `DELETE` with `If-Match`.
-Updates are read-modify-write: fetch current object + ETag, mutate, PUT with the
-ETag.
+`If-Match: <etag>` for lost-update protection. Updates are read-modify-write:
+fetch current object + ETag, mutate, PUT with the ETag. `DELETE` is
+**unconditional** (delete-by-UID): a UID identifies the same logical object
+across edits, so deleting it is correct regardless of intervening changes — an
+`If-Match` guard there would make a benign reschedule spuriously fail the
+delete, which is worse UX for an assistant. Only `PUT` is ETag-guarded.
 
 ## 7. MCP Tools (v1)
 
@@ -170,8 +173,9 @@ ETag.
 - `update_task(calendar, uid, <patch fields>)`
 - `delete_task(calendar, uid)`
 
-Conventions: times are RFC3339 with an explicit timezone; all mutations are
-ETag-guarded (fetched internally if the caller does not supply one).
+Conventions: times are RFC3339 with an explicit timezone; `update_*` are
+ETag-guarded read-modify-write (etag fetched internally). `delete_*` are
+unconditional delete-by-UID (see §6).
 
 ## 8. Error Handling & Testing
 
