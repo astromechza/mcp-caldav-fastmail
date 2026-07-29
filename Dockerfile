@@ -67,7 +67,8 @@ RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /app
 COPY . .
 RUN cargo build --release --target x86_64-unknown-linux-musl
-RUN strip target/x86_64-unknown-linux-musl/release/mcp-caldav-fastmail
+# Symbol stripping is handled by `[profile.release] strip = true` in Cargo.toml
+# (no external binutils `strip` needed in the builder image).
 
 FROM scratch
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/mcp-caldav-fastmail /mcp-caldav-fastmail

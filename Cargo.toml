@@ -31,3 +31,8 @@ sha2 = "0.11.0"
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+# Strip symbols via the Rust toolchain (no external `strip`/binutils needed in
+# the build image), keeping the scratch runtime image small.
+strip = true
