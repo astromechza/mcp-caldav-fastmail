@@ -107,6 +107,20 @@ fn challenge(st: &AuthState) -> Response {
         .into_response()
 }
 
+/// Compose the public PRM route with an auth-gated protected router.
+/// `protected` is any Router (in main, it carries the nested /mcp MCP service);
+/// require_auth is layered over it, and the public PRM route is merged in unguarded.
+pub fn build_router(auth_state: AuthState, protected: axum::Router<AuthState>) -> axum::Router {
+    use axum::routing::get;
+    let protected = protected.layer(axum::middleware::from_fn_with_state(
+        auth_state.clone(),
+        require_auth,
+    ));
+    let public =
+        axum::Router::new().route("/.well-known/oauth-protected-resource", get(prm_handler));
+    public.merge(protected).with_state(auth_state)
+}
+
 #[cfg(test)]
 mod middleware_tests {
     use super::*;
@@ -165,5 +179,77 @@ mod middleware_tests {
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert!(resp.headers().get(WWW_AUTHENTICATE).is_some());
+    }
+}
+
+/// Regression guard for the security-critical composition in `main.rs`: the
+/// protected router (which in production nests the /mcp service) must be
+/// gated by `require_auth`, while the public PRM route must remain reachable
+/// without a token.
+#[cfg(test)]
+mod build_router_tests {
+    use super::*;
+    use crate::auth::validator::{JwtValidator, KeySource};
+    use crate::error::Result;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::routing::get;
+    use jsonwebtoken::DecodingKey;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    /// A KeySource that is never actually queried in these tests, since we
+    /// never send a well-formed bearer token through the middleware.
+    struct UnusedKeySource;
+    #[async_trait::async_trait]
+    impl KeySource for UnusedKeySource {
+        async fn key(&self, _kid: &str) -> Result<DecodingKey> {
+            unreachable!("no token is sent in this test, so no key lookup should occur")
+        }
+    }
+
+    fn test_state() -> AuthState {
+        AuthState {
+            validator: Arc::new(JwtValidator::new(
+                Arc::new(UnusedKeySource),
+                "https://auth.example.com".into(),
+                "https://mcp.example.com".into(),
+                "caldav".into(),
+            )),
+            prm_url: "https://mcp.example.com/.well-known/oauth-protected-resource".into(),
+            resource: "https://mcp.example.com".into(),
+            issuer: "https://auth.example.com".into(),
+            scope: "caldav".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_route_is_gated_while_prm_route_stays_public() {
+        let protected = Router::new().route("/mcp", get(|| async { "ok" }));
+        let app = build_router(test_state(), protected);
+
+        let mcp_resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mcp_resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(mcp_resp.headers().get(WWW_AUTHENTICATE).is_some());
+
+        let prm_resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/.well-known/oauth-protected-resource")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(prm_resp.status(), StatusCode::OK);
     }
 }

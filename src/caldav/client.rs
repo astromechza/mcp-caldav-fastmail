@@ -48,6 +48,7 @@ impl FastmailCalDav {
         let base = Url::parse(base_url)
             .map_err(|e| Error::Config(format!("invalid CalDAV base URL {base_url:?}: {e}")))?;
         let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Config(format!("failed to build HTTP client: {e}")))?;
         Ok(Self {

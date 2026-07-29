@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub bind_addr: String,
     pub resource_uri: String,
@@ -10,6 +10,23 @@ pub struct Config {
     pub fastmail_username: String,
     pub fastmail_app_password: String,
     pub caldav_base_url: String,
+}
+
+/// Manual `Debug` impl so `fastmail_app_password` never appears in logs: `{cfg:?}`
+/// redacts it instead of printing the plaintext Fastmail app password.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bind_addr", &self.bind_addr)
+            .field("resource_uri", &self.resource_uri)
+            .field("authelia_issuer", &self.authelia_issuer)
+            .field("authelia_jwks_uri", &self.authelia_jwks_uri)
+            .field("required_scope", &self.required_scope)
+            .field("fastmail_username", &self.fastmail_username)
+            .field("fastmail_app_password", &"[redacted]")
+            .field("caldav_base_url", &self.caldav_base_url)
+            .finish()
+    }
 }
 
 impl Config {
@@ -62,5 +79,20 @@ mod tests {
     fn missing_required_errors() {
         let cfg = Config::from_lookup(lookup(HashMap::new()));
         assert!(cfg.is_err());
+    }
+
+    #[test]
+    fn debug_redacts_app_password() {
+        let m = HashMap::from([
+            ("RESOURCE_URI", "https://mcp.example.com"),
+            ("AUTHELIA_ISSUER", "https://auth.example.com"),
+            ("AUTHELIA_JWKS_URI", "https://auth.example.com/jwks.json"),
+            ("FASTMAIL_USERNAME", "me@fastmail.com"),
+            ("FASTMAIL_APP_PASSWORD", "supersecret"),
+        ]);
+        let cfg = Config::from_lookup(lookup(m)).unwrap();
+        let debug_str = format!("{cfg:?}");
+        assert!(debug_str.contains("[redacted]"));
+        assert!(!debug_str.contains("supersecret"));
     }
 }

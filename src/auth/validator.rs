@@ -102,7 +102,10 @@ impl JwksKeySource {
         Self {
             jwks_uri,
             cache: RwLock::new(HashMap::new()),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("build reqwest client"),
         }
     }
 
