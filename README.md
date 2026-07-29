@@ -261,36 +261,39 @@ All 11 tools are registered in `src/mcp/tools.rs`:
 
 ## Known limitations
 
-- **Recurrence tier R1 + R2 only.** Reading/expanding a recurring series into
-  concrete instances, and creating/editing a whole series, are supported.
-  Per-instance overrides and this-and-future splits (`RECURRENCE-ID`, series
-  splitting — tier R3) are **not** implemented.
-- **`list_tasks` has no server-side status/due filter.** It returns all
-  VTODOs in the calendar; filtering is left to the caller.
-- **Update tools use "`None` means leave unchanged" semantics.** There is no
-  way to explicitly clear a field (e.g. remove a location or description) —
-  only to set it to a new value or omit it.
-- **Task `status` is a free string**, not validated against the
-  `NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED` enum — callers can set
-  anything.
+Each is tracked as a GitHub issue:
+
+- **Recurrence tier R1 + R2 only.** Reading/expanding a recurring series and
+  creating/editing a whole series are supported; per-instance overrides and
+  this-and-future splits (`RECURRENCE-ID`, series splitting — tier R3) are not.
+  ([#6](https://github.com/astromechza/mcp-caldav-fastmail/issues/6))
+- **`list_tasks` has no server-side status/due filter** — it returns all
+  VTODOs; filtering is left to the caller.
+  ([#7](https://github.com/astromechza/mcp-caldav-fastmail/issues/7))
+- **Update tools use "`None` means leave unchanged"** — there is no way to
+  explicitly clear an optional field (only set or omit it).
+  ([#8](https://github.com/astromechza/mcp-caldav-fastmail/issues/8))
+- **Task `status` is a free string**, not validated against
+  `NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED`.
+  ([#9](https://github.com/astromechza/mcp-caldav-fastmail/issues/9))
 - **Floating datetimes** (no `TZID`, no trailing `Z`) are treated as UTC
   rather than resolved against a user/system timezone.
+  ([#10](https://github.com/astromechza/mcp-caldav-fastmail/issues/10))
 - **Built iCalendar output is not RFC 5545 line-folded** (no 75-octet
-  continuation lines). Most servers, including Fastmail, tolerate this, but
-  it's a deviation from the spec.
-- **Calendar component-set detection defaults to `["VEVENT"]`** for every
-  calendar — the flat XML parser does not currently read
-  `supported-calendar-component-set` from the PROPFIND response, so
-  VTODO-only or mixed calendars are not distinguished in `list_calendars`
-  output.
+  continuation lines). Fastmail tolerates it; stricter parsers may not.
+  ([#11](https://github.com/astromechza/mcp-caldav-fastmail/issues/11))
 - **`token` and `none` modes have no PRM document and no OAuth discovery.**
-  This is by design (there's no authorization server to describe), but it
-  means clients that hard-require PRM discovery before allowing a static
-  header won't work in those modes.
+  This is by design (no authorization server to describe), but clients that
+  hard-require PRM discovery before sending a static header won't work in
+  those modes.
 
-**Deferred (not planned for this version):** CardDAV/contacts, iTIP/iMIP
-scheduling (invites, RSVPs), a JSCalendar/JMAP-native path, and multi-user
-support.
+**Deferred (future scope):**
+[CardDAV/contacts](https://github.com/astromechza/mcp-caldav-fastmail/issues/12),
+[iTIP/iMIP scheduling](https://github.com/astromechza/mcp-caldav-fastmail/issues/13)
+(invites, RSVPs; note the scheduling Inbox/Outbox are currently excluded from
+`list_calendars`), a
+[JSCalendar/JMAP-native path](https://github.com/astromechza/mcp-caldav-fastmail/issues/14),
+and [multi-user support](https://github.com/astromechza/mcp-caldav-fastmail/issues/15).
 
 ## Deployment
 
