@@ -79,6 +79,57 @@ fn local(qname: &[u8]) -> String {
     }
 }
 
+/// Extract the text of a nested `<href>` element inside a named container property.
+///
+/// Some DAV properties (`current-user-principal`, `calendar-home-set`) have a value
+/// that is itself a single nested `<href>...</href>`, e.g.:
+/// ```xml
+/// <current-user-principal><href>/dav/principals/user/me/</href></current-user-principal>
+/// ```
+/// [`parse_multistatus`] is a flat local-name parser and cannot represent this
+/// unambiguously (the container's own text is empty, and the inner `<href>` text
+/// collides with the response's own outer `<href>` under the same `"href"` key - see
+/// module docs). This is a small, dedicated pass that walks the raw XML looking
+/// specifically for `<container_local_name><href>...</href></container_local_name>`
+/// and returns the inner text of the first such match.
+pub fn nested_href(xml: &str, container_local_name: &str) -> Result<Option<String>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut depth: u32 = 0; // > 0 while inside the target container
+    let mut in_href = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Err(e) => return Err(Error::Xml(e.to_string())),
+            Ok(XmlEvent::Eof) => break,
+            Ok(XmlEvent::Start(e)) => {
+                let name = local(e.name().as_ref());
+                if name == container_local_name {
+                    depth += 1;
+                } else if depth > 0 && name == "href" {
+                    in_href = true;
+                }
+            }
+            Ok(XmlEvent::Text(t)) if depth > 0 && in_href => {
+                let text = t.unescape().map_err(|e| Error::Xml(e.to_string()))?.to_string();
+                return Ok(Some(text));
+            }
+            Ok(XmlEvent::End(e)) => {
+                let name = local(e.name().as_ref());
+                if name == container_local_name {
+                    depth = depth.saturating_sub(1);
+                } else if name == "href" {
+                    in_href = false;
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(None)
+}
+
 /// PROPFIND body requesting the properties we use for discovery.
 pub fn propfind_calendars_body() -> &'static str {
     r#"<?xml version="1.0" encoding="utf-8"?>
@@ -168,5 +219,47 @@ mod tests {
         assert!(body.contains("calendar-query"));
         assert!(body.contains("VEVENT"));
         assert!(body.contains("start=\"20260801T000000Z\""));
+    }
+
+    const PRINCIPAL_MULTISTATUS: &str = r#"<?xml version="1.0"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/</href>
+    <propstat><prop>
+      <current-user-principal>
+        <href>/dav/principals/user/me/</href>
+      </current-user-principal>
+    </prop></propstat>
+  </response>
+</multistatus>"#;
+
+    const HOME_MULTISTATUS: &str = r#"<?xml version="1.0"?>
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <response>
+    <href>/dav/principals/user/me/</href>
+    <propstat><prop>
+      <C:calendar-home-set>
+        <href>/dav/calendars/user/me/</href>
+      </C:calendar-home-set>
+    </prop></propstat>
+  </response>
+</multistatus>"#;
+
+    #[test]
+    fn nested_href_extracts_current_user_principal() {
+        let href = nested_href(PRINCIPAL_MULTISTATUS, "current-user-principal").expect("parse");
+        assert_eq!(href.as_deref(), Some("/dav/principals/user/me/"));
+    }
+
+    #[test]
+    fn nested_href_extracts_calendar_home_set() {
+        let href = nested_href(HOME_MULTISTATUS, "calendar-home-set").expect("parse");
+        assert_eq!(href.as_deref(), Some("/dav/calendars/user/me/"));
+    }
+
+    #[test]
+    fn nested_href_returns_none_when_container_absent() {
+        let href = nested_href(HOME_MULTISTATUS, "current-user-principal").expect("parse");
+        assert_eq!(href, None);
     }
 }
