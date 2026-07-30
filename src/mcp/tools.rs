@@ -38,11 +38,22 @@ pub struct GetByUidReq {
     pub uid: String,
 }
 
-/// Parameters scoping a request to a single calendar.
+/// Parameters for listing tasks (VTODOs), with optional client-side filters.
+/// Filters are combined with AND; omitting a filter leaves that dimension
+/// unrestricted, so an all-`None` request returns every task in the calendar.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct CalendarRef {
-    /// Calendar href to operate on.
+pub struct ListTasksReq {
+    /// Calendar href to query, e.g. "/dav/calendars/user/me/todo/".
     pub calendar: String,
+    /// Keep only tasks whose status matches this value (case-insensitive):
+    /// NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED.
+    pub status: Option<TaskStatus>,
+    /// Keep only tasks with a due date strictly before this instant (RFC 3339).
+    /// Tasks without a due date are excluded when this is set.
+    pub due_before: Option<DateTime<Utc>>,
+    /// Keep only tasks with a due date at or after this instant (RFC 3339).
+    /// Tasks without a due date are excluded when this is set.
+    pub due_after: Option<DateTime<Utc>>,
 }
 
 /// Parameters for creating a new event.
@@ -281,16 +292,40 @@ impl CalendarServer {
         ok_json(&serde_json::json!({ "deleted": req.uid }))
     }
 
-    #[tool(description = "List tasks (VTODOs) in a calendar.")]
+    #[tool(
+        description = "List tasks (VTODOs) in a calendar, with optional status and due-date filters."
+    )]
     async fn list_tasks(
         &self,
-        Parameters(req): Parameters<CalendarRef>,
+        Parameters(req): Parameters<ListTasksReq>,
     ) -> Result<CallToolResult, McpError> {
         let todos = self
             .client
             .list_todos(&req.calendar)
             .await
             .map_err(map_err)?;
+        // Client-side filtering: fetch everything, then narrow. Pushing these
+        // predicates into the CalDAV calendar-query REPORT is a documented
+        // follow-up (issue #7).
+        let want_status = req.status.map(TaskStatus::as_ical_token);
+        let todos: Vec<Todo> = todos
+            .into_iter()
+            .filter(|t| match want_status {
+                Some(want) => t
+                    .status
+                    .as_deref()
+                    .is_some_and(|got| got.eq_ignore_ascii_case(want)),
+                None => true,
+            })
+            .filter(|t| match (req.due_after, req.due_before) {
+                (None, None) => true,
+                (after, before) => match t.due {
+                    Some(due) => after.is_none_or(|a| due >= a) && before.is_none_or(|b| due < b),
+                    // A task with no due date can't satisfy a due-window filter.
+                    None => false,
+                },
+            })
+            .collect();
         ok_json(&todos)
     }
 
@@ -436,7 +471,7 @@ mod tests {
         }
 
         async fn list_todos(&self, _cal_href: &str) -> Result<Vec<Todo>> {
-            Ok(vec![])
+            Ok(sample_todos())
         }
 
         async fn get_todo(&self, _cal_href: &str, uid: &str) -> Result<Todo> {
@@ -459,6 +494,34 @@ mod tests {
         async fn delete_todo(&self, _cal_href: &str, _uid: &str) -> Result<()> {
             Ok(())
         }
+    }
+
+    /// Parse an RFC 3339 timestamp into a UTC [`DateTime`] for test fixtures.
+    fn dt(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    /// A canned set of four VTODOs with varying status and due dates, used to
+    /// assert that `list_tasks` filters narrow the result correctly.
+    fn sample_todos() -> Vec<Todo> {
+        let mk = |uid: &str, status: Option<&str>, due: Option<&str>| Todo {
+            uid: uid.into(),
+            href: Some(format!("/cal/{uid}.ics")),
+            etag: Some("\"t1\"".into()),
+            summary: format!("Task {uid}"),
+            due: due.map(dt),
+            status: status.map(str::to_string),
+            description: None,
+            priority: None,
+        };
+        vec![
+            // "a" is stored lower-case to prove the status match is case-insensitive
+            // against the canonical iCal token.
+            mk("a", Some("needs-action"), Some("2026-08-01T00:00:00Z")),
+            mk("b", Some("COMPLETED"), Some("2026-08-10T00:00:00Z")),
+            mk("c", Some("IN-PROCESS"), None),
+            mk("d", Some("NEEDS-ACTION"), Some("2026-08-20T00:00:00Z")),
+        ]
     }
 
     /// Concatenate all text content blocks of a [`CallToolResult`] for substring
@@ -582,5 +645,81 @@ mod tests {
             serde_json::from_value::<CreateTaskReq>(json).is_err(),
             "an invalid status value must be rejected at deserialization"
         );
+    }
+
+    /// Run `list_tasks` with the given filters and return the resulting UIDs, sorted.
+    async fn list_task_uids(req: ListTasksReq) -> Vec<String> {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let result = server.list_tasks(Parameters(req)).await.unwrap();
+        let todos: Vec<Todo> = serde_json::from_str(&result_text(&result)).unwrap();
+        let mut uids: Vec<String> = todos.into_iter().map(|t| t.uid).collect();
+        uids.sort();
+        uids
+    }
+
+    #[tokio::test]
+    async fn list_tasks_no_filter_returns_all() {
+        let uids = list_task_uids(ListTasksReq {
+            calendar: "/cal/work/".into(),
+            status: None,
+            due_before: None,
+            due_after: None,
+        })
+        .await;
+        assert_eq!(uids, vec!["a", "b", "c", "d"]);
+    }
+
+    #[tokio::test]
+    async fn list_tasks_status_filter_is_case_insensitive() {
+        // Matches both "a" (stored "needs-action") and "d" (stored "NEEDS-ACTION").
+        let uids = list_task_uids(ListTasksReq {
+            calendar: "/cal/work/".into(),
+            status: Some(TaskStatus::NeedsAction),
+            due_before: None,
+            due_after: None,
+        })
+        .await;
+        assert_eq!(uids, vec!["a", "d"]);
+    }
+
+    #[tokio::test]
+    async fn list_tasks_due_before_excludes_undated_and_later() {
+        // a (2026-08-01) and b (2026-08-10) are before the cutoff; d (2026-08-20)
+        // is after and c has no due date, so both are excluded.
+        let uids = list_task_uids(ListTasksReq {
+            calendar: "/cal/work/".into(),
+            status: None,
+            due_before: Some(dt("2026-08-15T00:00:00Z")),
+            due_after: None,
+        })
+        .await;
+        assert_eq!(uids, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn list_tasks_due_after_is_inclusive_and_excludes_undated() {
+        // due_after is an inclusive lower bound: b (2026-08-10) and d (2026-08-20)
+        // qualify; a (2026-08-01) is earlier and c has no due date.
+        let uids = list_task_uids(ListTasksReq {
+            calendar: "/cal/work/".into(),
+            status: None,
+            due_before: None,
+            due_after: Some(dt("2026-08-10T00:00:00Z")),
+        })
+        .await;
+        assert_eq!(uids, vec!["b", "d"]);
+    }
+
+    #[tokio::test]
+    async fn list_tasks_combines_status_and_due_window() {
+        // NEEDS-ACTION tasks are a and d; the window [08-05, 08-25) keeps only d.
+        let uids = list_task_uids(ListTasksReq {
+            calendar: "/cal/work/".into(),
+            status: Some(TaskStatus::NeedsAction),
+            due_before: Some(dt("2026-08-25T00:00:00Z")),
+            due_after: Some(dt("2026-08-05T00:00:00Z")),
+        })
+        .await;
+        assert_eq!(uids, vec!["d"]);
     }
 }

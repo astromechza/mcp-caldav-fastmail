@@ -253,7 +253,7 @@ All 11 tools are registered in `src/mcp/tools.rs`:
 - `create_event` — Create a new event.
 - `update_event` — Update an existing event. This always edits the whole series, never a single instance.
 - `delete_event` — Delete an event by UID.
-- `list_tasks` — List tasks (VTODOs) in a calendar.
+- `list_tasks` — List tasks (VTODOs) in a calendar, with optional `status` and `due_before`/`due_after` filters.
 - `get_task` — Get a single task (VTODO) by UID.
 - `create_task` — Create a new task.
 - `update_task` — Update an existing task.
@@ -267,8 +267,9 @@ Each is tracked as a GitHub issue:
   creating/editing a whole series are supported; per-instance overrides and
   this-and-future splits (`RECURRENCE-ID`, series splitting — tier R3) are not.
   ([#6](https://github.com/astromechza/mcp-caldav-fastmail/issues/6))
-- **`list_tasks` has no server-side status/due filter** — it returns all
-  VTODOs; filtering is left to the caller.
+- **`list_tasks` filters client-side, not server-side** — `status`/`due_before`/
+  `due_after` are applied in-process after fetching all VTODOs; pushing them into
+  the CalDAV `calendar-query` REPORT is a follow-up.
   ([#7](https://github.com/astromechza/mcp-caldav-fastmail/issues/7))
 - **Update tools use "`None` means leave unchanged"** — there is no way to
   explicitly clear an optional field (only set or omit it).
