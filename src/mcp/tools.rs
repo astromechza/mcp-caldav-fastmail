@@ -86,6 +86,33 @@ pub struct UpdateEventReq {
     pub rrule: Option<String>,
 }
 
+/// RFC5545 §3.8.1.11 status values valid for a VTODO. Constraining the MCP schema
+/// to this closed set stops a bogus free-text status being written verbatim into the
+/// STATUS property. The JSON/iCal tokens are the exact enumerated values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum TaskStatus {
+    #[serde(rename = "NEEDS-ACTION")]
+    NeedsAction,
+    #[serde(rename = "IN-PROCESS")]
+    InProcess,
+    #[serde(rename = "COMPLETED")]
+    Completed,
+    #[serde(rename = "CANCELLED")]
+    Cancelled,
+}
+
+impl TaskStatus {
+    /// The RFC5545 STATUS token for this value, as written into the VTODO.
+    fn as_ical_token(self) -> &'static str {
+        match self {
+            TaskStatus::NeedsAction => "NEEDS-ACTION",
+            TaskStatus::InProcess => "IN-PROCESS",
+            TaskStatus::Completed => "COMPLETED",
+            TaskStatus::Cancelled => "CANCELLED",
+        }
+    }
+}
+
 /// Parameters for creating a new task (VTODO).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateTaskReq {
@@ -96,7 +123,7 @@ pub struct CreateTaskReq {
     /// Optional due date/time, RFC 3339.
     pub due: Option<DateTime<Utc>>,
     /// Optional status: NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED.
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     /// Optional free-text description.
     pub description: Option<String>,
     /// Optional priority, iCalendar scale (0 = undefined, 1 = highest, 9 = lowest).
@@ -116,7 +143,7 @@ pub struct UpdateTaskReq {
     /// New due date/time, if changing.
     pub due: Option<DateTime<Utc>>,
     /// New status, if changing.
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     /// New description, if changing.
     pub description: Option<String>,
     /// New priority, if changing.
@@ -291,7 +318,7 @@ impl CalendarServer {
             etag: None,
             summary: req.summary,
             due: req.due,
-            status: req.status,
+            status: req.status.map(|s| s.as_ical_token().to_string()),
             description: req.description,
             priority: req.priority,
         };
@@ -310,7 +337,7 @@ impl CalendarServer {
         let patch = TodoPatch {
             summary: req.summary,
             due: req.due,
-            status: req.status,
+            status: req.status.map(|s| s.as_ical_token().to_string()),
             description: req.description,
             priority: req.priority,
         };
@@ -482,6 +509,78 @@ mod tests {
         assert!(
             !text.contains("Original summary"),
             "unpatched summary leaked through: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_task_writes_each_status_token() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let cases = [
+            (TaskStatus::NeedsAction, "NEEDS-ACTION"),
+            (TaskStatus::InProcess, "IN-PROCESS"),
+            (TaskStatus::Completed, "COMPLETED"),
+            (TaskStatus::Cancelled, "CANCELLED"),
+        ];
+        for (status, token) in cases {
+            let req = CreateTaskReq {
+                calendar: "/cal/work/".into(),
+                summary: "Task".into(),
+                due: None,
+                status: Some(status),
+                description: None,
+                priority: None,
+            };
+            let result = server.create_task(Parameters(req)).await.unwrap();
+            let text = result_text(&result);
+            assert!(
+                text.contains(token),
+                "expected status token {token} in result, got: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn update_task_writes_status_token() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateTaskReq {
+            calendar: "/cal/work/".into(),
+            uid: "todo-1".into(),
+            summary: None,
+            due: None,
+            status: Some(TaskStatus::Completed),
+            description: None,
+            priority: None,
+        };
+        let result = server.update_task(Parameters(req)).await.unwrap();
+        let text = result_text(&result);
+        assert!(
+            text.contains("COMPLETED"),
+            "expected status token COMPLETED in result, got: {text}"
+        );
+    }
+
+    #[test]
+    fn create_task_req_accepts_valid_status() {
+        let json = serde_json::json!({
+            "calendar": "/cal/work/",
+            "summary": "Task",
+            "status": "IN-PROCESS"
+        });
+        let req: CreateTaskReq =
+            serde_json::from_value(json).expect("valid status token must deserialize");
+        assert!(matches!(req.status, Some(TaskStatus::InProcess)));
+    }
+
+    #[test]
+    fn create_task_req_rejects_invalid_status() {
+        let json = serde_json::json!({
+            "calendar": "/cal/work/",
+            "summary": "Task",
+            "status": "BOGUS"
+        });
+        assert!(
+            serde_json::from_value::<CreateTaskReq>(json).is_err(),
+            "an invalid status value must be rejected at deserialization"
         );
     }
 }
