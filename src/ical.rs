@@ -58,8 +58,8 @@ pub fn parse_todo(ics: &str) -> Result<Todo> {
 /// keeps this side of the seam simple and decoupled from calcard's internal
 /// representation.
 ///
-/// Note: output is intentionally not RFC5545 line-folded (no 75-octet continuation
-/// wrapping) - see module-level tests for the accepted round-trip guarantee.
+/// Content lines are RFC5545 3.1 folded (see [`fold_line`]) so no physical line
+/// exceeds 75 octets; calcard unfolds them on read, so the round-trip is lossless.
 pub fn build_event(ev: &Event) -> String {
     let mut out = String::new();
     out.push_str(
@@ -79,9 +79,7 @@ pub fn build_event(ev: &Event) -> String {
         // RRULE's value is itself a structured list of NAME=VALUE parts separated by
         // ';' - those separators are syntax, not TEXT content, so they must not be
         // escaped here.
-        out.push_str("RRULE:");
-        out.push_str(rrule);
-        out.push_str("\r\n");
+        fold_line(&mut out, &format!("RRULE:{rrule}"));
     }
     out.push_str("END:VEVENT\r\nEND:VCALENDAR\r\n");
     out
@@ -89,8 +87,8 @@ pub fn build_event(ev: &Event) -> String {
 
 /// Serialize a [`Todo`] as a complete VCALENDAR document wrapping a single VTODO.
 ///
-/// Note: output is intentionally not RFC5545 line-folded (no 75-octet continuation
-/// wrapping) - see module-level tests for the accepted round-trip guarantee.
+/// Content lines are RFC5545 3.1 folded (see [`fold_line`]); calcard unfolds them
+/// on read, so the round-trip is lossless.
 pub fn build_todo(td: &Todo) -> String {
     let mut out = String::new();
     out.push_str(
@@ -103,15 +101,13 @@ pub fn build_todo(td: &Todo) -> String {
     }
     if let Some(status) = &td.status {
         // STATUS is an enumerated token, not TEXT - no escaping.
-        out.push_str("STATUS:");
-        out.push_str(status);
-        out.push_str("\r\n");
+        fold_line(&mut out, &format!("STATUS:{status}"));
     }
     if let Some(description) = &td.description {
         write_text_line(&mut out, "DESCRIPTION", description);
     }
     if let Some(priority) = td.priority {
-        out.push_str(&format!("PRIORITY:{priority}\r\n"));
+        fold_line(&mut out, &format!("PRIORITY:{priority}"));
     }
     out.push_str("END:VTODO\r\nEND:VCALENDAR\r\n");
     out
@@ -400,18 +396,37 @@ fn escape_text(s: &str) -> String {
     out
 }
 
-fn write_text_line(out: &mut String, name: &str, value: &str) {
-    out.push_str(name);
-    out.push(':');
-    out.push_str(&escape_text(value));
+/// Emit `line` (a complete "NAME:value" content line, no trailing CRLF) folded per
+/// RFC5545 3.1: no physical line exceeds 75 octets, and each continuation line
+/// begins with a single space (which itself counts toward the 75-octet budget).
+/// Breaks fall on UTF-8 char boundaries so a multi-byte codepoint is never split -
+/// octets are measured, but the break lands at or before the 75-octet limit on a
+/// char boundary. Physical lines are separated by CRLF and the logical line is
+/// terminated by a trailing CRLF. calcard unfolds these on read.
+fn fold_line(out: &mut String, line: &str) {
+    // Octets available for content on the current physical line: 75 on the first,
+    // 74 on continuations (the leading space consumes one).
+    let mut budget = 75usize;
+    let mut used = 0usize;
+    for c in line.chars() {
+        let clen = c.len_utf8();
+        if used + clen > budget {
+            out.push_str("\r\n ");
+            used = 0;
+            budget = 74;
+        }
+        out.push(c);
+        used += clen;
+    }
     out.push_str("\r\n");
 }
 
+fn write_text_line(out: &mut String, name: &str, value: &str) {
+    fold_line(out, &format!("{name}:{}", escape_text(value)));
+}
+
 fn write_datetime_line(out: &mut String, name: &str, value: DateTime<Utc>) {
-    out.push_str(name);
-    out.push(':');
-    out.push_str(&value.format("%Y%m%dT%H%M%SZ").to_string());
-    out.push_str("\r\n");
+    fold_line(out, &format!("{name}:{}", value.format("%Y%m%dT%H%M%SZ")));
 }
 
 #[cfg(test)]
@@ -573,6 +588,53 @@ END:VCALENDAR\r\n";
             ev.end,
             "2026-08-04T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
         );
+    }
+
+    #[test]
+    fn build_folds_long_lines_and_roundtrips() {
+        // A DESCRIPTION well over 75 octets with a 4-octet codepoint positioned so a
+        // naive byte-cut at 75 octets would land inside it. The content line is
+        // "DESCRIPTION:" (12 octets) + 61 filler octets = 73 octets before the emoji;
+        // adding the emoji's 4 octets reaches 77, so a naive break would slice the
+        // emoji at octet 75/76. RFC5545 3.1 folding must instead break on the char
+        // boundary and carry the whole emoji to the next physical line. calcard
+        // unfolds on read, so the round-trip must return the description byte-for-byte.
+        let description = format!("{}\u{1F600}{}", "x".repeat(61), "y".repeat(40));
+        let description = description.as_str();
+        let ev = Event {
+            uid: "evt-fold".into(),
+            href: None,
+            etag: None,
+            summary: "Folded".into(),
+            start: "2026-08-03T12:00:00Z".parse().unwrap(),
+            end: "2026-08-03T13:00:00Z".parse().unwrap(),
+            location: None,
+            description: Some(description.into()),
+            rrule: None,
+            is_instance: false,
+        };
+        let ics = build_event(&ev);
+        // Folding actually happened: at least one continuation line starts with a space.
+        assert!(
+            ics.contains("\r\n "),
+            "expected a folded continuation line, got:\n{ics}"
+        );
+        // The fold broke on the char boundary: the whole emoji was carried onto the
+        // continuation line intact rather than being split across the boundary.
+        assert!(
+            ics.contains("\r\n \u{1F600}"),
+            "expected the emoji intact at a continuation line start, got:\n{ics}"
+        );
+        // Every physical line is within the 75-octet limit.
+        for line in ics.split("\r\n") {
+            assert!(
+                line.len() <= 75,
+                "line exceeds 75 octets ({}): {line:?}",
+                line.len()
+            );
+        }
+        let back = parse_event(&ics).expect("parse");
+        assert_eq!(back.description.as_deref(), Some(description));
     }
 
     #[test]
