@@ -251,12 +251,12 @@ All 11 tools are registered in `src/mcp/tools.rs`:
 - `list_events` — List events in a calendar within a time window.
 - `get_event` — Get a single event by UID.
 - `create_event` — Create a new event.
-- `update_event` — Update an existing event. This always edits the whole series, never a single instance.
+- `update_event` — Update an existing event. This always edits the whole series, never a single instance. Set fields to change them; omit to leave unchanged; use `clear` (a list of `location` / `description` / `rrule`) to null a field. If a field is both set and cleared, the set wins.
 - `delete_event` — Delete an event by UID.
 - `list_tasks` — List tasks (VTODOs) in a calendar, with optional `status` and `due_before`/`due_after` filters.
 - `get_task` — Get a single task (VTODO) by UID.
 - `create_task` — Create a new task.
-- `update_task` — Update an existing task.
+- `update_task` — Update an existing task. Set fields to change them; omit to leave unchanged; use `clear` (a list of `due` / `status` / `description` / `priority`) to null a field. If a field is both set and cleared, the set wins.
 - `delete_task` — Delete a task by UID.
 
 ## Known limitations
@@ -271,9 +271,6 @@ Each is tracked as a GitHub issue:
   `due_after` are applied in-process after fetching all VTODOs; pushing them into
   the CalDAV `calendar-query` REPORT is a follow-up.
   ([#7](https://github.com/astromechza/mcp-caldav-fastmail/issues/7))
-- **Update tools use "`None` means leave unchanged"** — there is no way to
-  explicitly clear an optional field (only set or omit it).
-  ([#8](https://github.com/astromechza/mcp-caldav-fastmail/issues/8))
 - **Task `status` is a free string**, not validated against
   `NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED`.
   ([#9](https://github.com/astromechza/mcp-caldav-fastmail/issues/9))
