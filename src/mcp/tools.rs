@@ -95,9 +95,9 @@ pub struct UpdateEventReq {
     pub description: Option<String>,
     /// New recurrence rule, if changing.
     pub rrule: Option<String>,
-    /// Names of optional fields to clear (set to empty). Clearable fields:
-    /// "location", "description", "rrule". If a field is both given a new value
-    /// above and named here, the new value wins. Unknown names are rejected.
+    /// Names of optional fields to unset (remove the value entirely). Clearable
+    /// fields: "location", "description", "rrule". If a field is both given a new
+    /// value above and named here, the new value wins. Unknown names are rejected.
     pub clear: Option<Vec<String>>,
 }
 
@@ -163,10 +163,10 @@ pub struct UpdateTaskReq {
     pub description: Option<String>,
     /// New priority, if changing.
     pub priority: Option<u8>,
-    /// Names of optional fields to clear (set to empty). Clearable fields:
-    /// "due", "status", "description", "priority". If a field is both given a
-    /// new value above and named here, the new value wins. Unknown names are
-    /// rejected.
+    /// Names of optional fields to unset (remove the value entirely). Clearable
+    /// fields: "due", "status", "description", "priority". If a field is both
+    /// given a new value above and named here, the new value wins. Unknown names
+    /// are rejected.
     pub clear: Option<Vec<String>>,
 }
 
