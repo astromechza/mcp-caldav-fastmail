@@ -86,6 +86,22 @@ impl Event {
             self.rrule = p.rrule;
         }
     }
+
+    /// Null out each optional field named in `names`. Only the clearable
+    /// optionals `location`, `description`, and `rrule` are accepted; any other
+    /// name (including the required `summary`/`start`/`end`/`uid`) returns that
+    /// name as an `Err` so callers can reject the request.
+    pub fn clear_fields(&mut self, names: &[String]) -> Result<(), String> {
+        for name in names {
+            match name.as_str() {
+                "location" => self.location = None,
+                "description" => self.description = None,
+                "rrule" => self.rrule = None,
+                other => return Err(other.to_string()),
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Todo {
@@ -107,6 +123,23 @@ impl Todo {
         if p.priority.is_some() {
             self.priority = p.priority;
         }
+    }
+
+    /// Null out each optional field named in `names`. Only the clearable
+    /// optionals `due`, `status`, `description`, and `priority` are accepted;
+    /// any other name (including the required `summary`/`uid`) returns that name
+    /// as an `Err` so callers can reject the request.
+    pub fn clear_fields(&mut self, names: &[String]) -> Result<(), String> {
+        for name in names {
+            match name.as_str() {
+                "due" => self.due = None,
+                "status" => self.status = None,
+                "description" => self.description = None,
+                "priority" => self.priority = None,
+                other => return Err(other.to_string()),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -170,6 +203,45 @@ mod tests {
         assert_eq!(ev.description, original.description);
         assert_eq!(ev.rrule, original.rrule);
         assert_eq!(ev.is_instance, original.is_instance);
+    }
+
+    #[test]
+    fn event_clear_fields_nulls_named_optionals() {
+        let mut ev = full_event();
+        ev.clear_fields(&["location".into(), "rrule".into()])
+            .unwrap();
+
+        assert_eq!(ev.location, None);
+        assert_eq!(ev.rrule, None);
+        // Unnamed optional and required fields are untouched.
+        assert_eq!(ev.description, Some("Daily sync".into()));
+        assert_eq!(ev.summary, "Standup");
+    }
+
+    #[test]
+    fn event_clear_fields_rejects_unknown_name() {
+        let mut ev = full_event();
+        let err = ev.clear_fields(&["summary".into()]).unwrap_err();
+        assert_eq!(err, "summary");
+    }
+
+    #[test]
+    fn todo_clear_fields_nulls_named_optionals() {
+        let mut td = full_todo();
+        td.clear_fields(&["due".into(), "priority".into()]).unwrap();
+
+        assert_eq!(td.due, None);
+        assert_eq!(td.priority, None);
+        // Unnamed optional and required fields are untouched.
+        assert_eq!(td.status, Some("NEEDS-ACTION".into()));
+        assert_eq!(td.summary, "Buy milk");
+    }
+
+    #[test]
+    fn todo_clear_fields_rejects_unknown_name() {
+        let mut td = full_todo();
+        let err = td.clear_fields(&["uid".into()]).unwrap_err();
+        assert_eq!(err, "uid");
     }
 
     #[test]

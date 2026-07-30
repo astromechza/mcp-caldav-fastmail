@@ -95,6 +95,10 @@ pub struct UpdateEventReq {
     pub description: Option<String>,
     /// New recurrence rule, if changing.
     pub rrule: Option<String>,
+    /// Names of optional fields to clear (set to empty). Clearable fields:
+    /// "location", "description", "rrule". If a field is both given a new value
+    /// above and named here, the new value wins. Unknown names are rejected.
+    pub clear: Option<Vec<String>>,
 }
 
 /// RFC5545 §3.8.1.11 status values valid for a VTODO. Constraining the MCP schema
@@ -159,6 +163,11 @@ pub struct UpdateTaskReq {
     pub description: Option<String>,
     /// New priority, if changing.
     pub priority: Option<u8>,
+    /// Names of optional fields to clear (set to empty). Clearable fields:
+    /// "due", "status", "description", "priority". If a field is both given a
+    /// new value above and named here, the new value wins. Unknown names are
+    /// rejected.
+    pub clear: Option<Vec<String>>,
 }
 
 /// Serialize `v` as pretty JSON text and wrap it as a successful tool result.
@@ -172,6 +181,11 @@ fn ok_json<T: serde::Serialize>(v: &T) -> Result<CallToolResult, McpError> {
 /// Map a domain [`Error`] onto the MCP error type.
 fn map_err(e: Error) -> McpError {
     McpError::internal_error(e.to_string(), None)
+}
+
+/// Map an unknown-field name from `clear_fields` onto an MCP invalid-params error.
+fn map_clear_err(field: String) -> McpError {
+    McpError::invalid_params(format!("unknown field in clear list: {field}"), None)
 }
 
 /// A fresh UID for a newly-created event or task.
@@ -271,6 +285,11 @@ impl CalendarServer {
             .get_event(&req.calendar, &req.uid)
             .await
             .map_err(map_err)?;
+        // Clear before patching so an explicit new value in the patch wins over a
+        // clear of the same field.
+        if let Some(clear) = &req.clear {
+            event.clear_fields(clear).map_err(map_clear_err)?;
+        }
         event.apply_patch(patch);
         event.is_instance = false;
         self.client
@@ -381,6 +400,11 @@ impl CalendarServer {
             .get_todo(&req.calendar, &req.uid)
             .await
             .map_err(map_err)?;
+        // Clear before patching so an explicit new value in the patch wins over a
+        // clear of the same field.
+        if let Some(clear) = &req.clear {
+            todo.clear_fields(clear).map_err(map_clear_err)?;
+        }
         todo.apply_patch(patch);
         self.client
             .put_todo(&req.calendar, &todo)
@@ -455,9 +479,9 @@ mod tests {
                 summary: "Original summary".into(),
                 start: Utc::now(),
                 end: Utc::now(),
-                location: None,
-                description: None,
-                rrule: None,
+                location: Some("Original location".into()),
+                description: Some("Original description".into()),
+                rrule: Some("FREQ=DAILY".into()),
                 is_instance: false,
             })
         }
@@ -480,10 +504,10 @@ mod tests {
                 href: Some(format!("/cal/{uid}.ics")),
                 etag: Some("\"t1\"".into()),
                 summary: "Original task".into(),
-                due: None,
-                status: None,
-                description: None,
-                priority: None,
+                due: Some(Utc::now()),
+                status: Some("NEEDS-ACTION".into()),
+                description: Some("Original description".into()),
+                priority: Some(5),
             })
         }
 
@@ -560,6 +584,7 @@ mod tests {
             location: None,
             description: None,
             rrule: None,
+            clear: None,
         };
         let result = server.update_event(Parameters(req)).await.unwrap();
         let text = result_text(&result);
@@ -613,12 +638,153 @@ mod tests {
             status: Some(TaskStatus::Completed),
             description: None,
             priority: None,
+            clear: None,
         };
         let result = server.update_task(Parameters(req)).await.unwrap();
         let text = result_text(&result);
         assert!(
             text.contains("COMPLETED"),
             "expected status token COMPLETED in result, got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_event_clears_named_field() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateEventReq {
+            calendar: "/cal/work/".into(),
+            uid: "evt-1".into(),
+            summary: None,
+            start: None,
+            end: None,
+            location: None,
+            description: None,
+            rrule: None,
+            clear: Some(vec!["location".into()]),
+        };
+        let result = server.update_event(Parameters(req)).await.unwrap();
+        let text = result_text(&result);
+        // The mock's event has a location; clearing it removes it, while the
+        // untouched description survives.
+        assert!(
+            !text.contains("Original location"),
+            "cleared location leaked through: {text}"
+        );
+        assert!(
+            text.contains("Original description"),
+            "untouched description was dropped: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_event_set_beats_clear() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateEventReq {
+            calendar: "/cal/work/".into(),
+            uid: "evt-1".into(),
+            summary: None,
+            start: None,
+            end: None,
+            location: Some("Room 5".into()),
+            description: None,
+            rrule: None,
+            // location is both set and cleared - the explicit set must win.
+            clear: Some(vec!["location".into()]),
+        };
+        let result = server.update_event(Parameters(req)).await.unwrap();
+        let text = result_text(&result);
+        assert!(
+            text.contains("Room 5"),
+            "explicit set should beat clear, got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_event_rejects_unknown_clear_field() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateEventReq {
+            calendar: "/cal/work/".into(),
+            uid: "evt-1".into(),
+            summary: None,
+            start: None,
+            end: None,
+            location: None,
+            description: None,
+            rrule: None,
+            clear: Some(vec!["summary".into()]),
+        };
+        let err = server.update_event(Parameters(req)).await.unwrap_err();
+        assert!(
+            err.to_string().contains("summary"),
+            "expected error naming the bad field, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_task_clears_named_field() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateTaskReq {
+            calendar: "/cal/work/".into(),
+            uid: "task-1".into(),
+            summary: None,
+            due: None,
+            status: None,
+            description: None,
+            priority: None,
+            clear: Some(vec!["description".into()]),
+        };
+        let result = server.update_task(Parameters(req)).await.unwrap();
+        let text = result_text(&result);
+        assert!(
+            !text.contains("Original description"),
+            "cleared description leaked through: {text}"
+        );
+        // Untouched status survives.
+        assert!(
+            text.contains("NEEDS-ACTION"),
+            "untouched status was dropped: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_task_set_beats_clear() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateTaskReq {
+            calendar: "/cal/work/".into(),
+            uid: "task-1".into(),
+            summary: None,
+            due: None,
+            status: Some(TaskStatus::Completed),
+            description: None,
+            priority: None,
+            // status is both set and cleared - the explicit set must win.
+            clear: Some(vec!["status".into()]),
+        };
+        let result = server.update_task(Parameters(req)).await.unwrap();
+        let text = result_text(&result);
+        assert!(
+            text.contains("COMPLETED"),
+            "explicit set should beat clear, got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_task_rejects_unknown_clear_field() {
+        let server = CalendarServer::new(Arc::new(MockClient));
+        let req = UpdateTaskReq {
+            calendar: "/cal/work/".into(),
+            uid: "task-1".into(),
+            summary: None,
+            due: None,
+            status: None,
+            description: None,
+            priority: None,
+            clear: Some(vec!["uid".into()]),
+        };
+        let err = server.update_task(Parameters(req)).await.unwrap_err();
+        assert!(
+            err.to_string().contains("uid"),
+            "expected error naming the bad field, got: {err}"
         );
     }
 
