@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/astromechza/mcp-caldav-fastmail/compare/v1.2.0...v1.2.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* bump webpki-root-certs and rustls-webpki for eMudhra CA distrust ([#24](https://github.com/astromechza/mcp-caldav-fastmail/issues/24)) ([519821a](https://github.com/astromechza/mcp-caldav-fastmail/commit/519821a98d3462ab442d541ac81aaba54414bd71))
+
 ## [1.2.0](https://github.com/astromechza/mcp-caldav-fastmail/compare/v1.1.0...v1.2.0) (2026-07-30)
 
 
